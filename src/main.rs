@@ -5,14 +5,10 @@ mod pixmap;
 mod request;
 mod screen;
 
-<<<<<<< HEAD
-use std::{net::{TcpListener, TcpStream}, thread};
-=======
 use std::{
     net::{TcpListener, TcpStream},
     thread,
 };
->>>>>>> b5703cb ((still incomplete))
 
 use connection::{establish_connection, Connection};
 use request::read_request;
@@ -26,33 +22,14 @@ fn main() {
 
     for stream in listener.incoming() {
         let stream = stream.unwrap();
-<<<<<<< HEAD
-        thread::spawn(|| {
-            match handle_connection(stream) {
-                Some(()) => println!("Succeeded."),
-                None => println!("Failed.")
-            }
-=======
         thread::spawn(|| match handle_connection(stream) {
             Some(()) => println!("Succeeded."),
             None => println!("Failed."),
->>>>>>> b5703cb ((still incomplete))
         });
     }
 }
 
 fn handle_connection(stream: TcpStream) -> Option<()> {
-<<<<<<< HEAD
-    let _connection = establish_connection(&stream)?;
-    loop {
-        let request = read_request(&stream);
-        println!("{request:#?}");
-        respond_request(&stream, request);
-        println!("responded");
-    }
-    Some(())
-}
-=======
     let mut connection = establish_connection(&stream)?;
     loop {
         let request = read_request(&stream);
@@ -61,4 +38,3 @@ fn handle_connection(stream: TcpStream) -> Option<()> {
     }
     Some(())
 }
->>>>>>> b5703cb ((still incomplete))

@@ -8,9 +8,6 @@ pub struct PixmapFormat {
     pub pad1: u32,
 }
 
-<<<<<<< HEAD
-pub static DEFAULT_PIXMAP_FORMATS: [PixmapFormat;1] = [PixmapFormat {depth: 1u8, bpp: 32u8, scanline_pad: 0u8, pad0: 0, pad1: 0 }];
-=======
 pub static DEFAULT_PIXMAP_FORMATS: [PixmapFormat; 1] = [PixmapFormat {
     depth: 1u8,
     bpp: 32u8,
@@ -18,4 +15,3 @@ pub static DEFAULT_PIXMAP_FORMATS: [PixmapFormat; 1] = [PixmapFormat {
     pad0: 0,
     pad1: 0,
 }];
->>>>>>> b5703cb ((still incomplete))
