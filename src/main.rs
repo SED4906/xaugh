@@ -10,6 +10,8 @@ use std::{net::{TcpListener, TcpStream}, thread};
 use connection::{establish_connection, Connection};
 use request::read_request;
 
+use crate::request::respond_request;
+
 static VENDOR: &str = "Xaugh X Server";
 
 fn main() {
@@ -27,15 +29,12 @@ fn main() {
 }
 
 fn handle_connection(stream: TcpStream) -> Option<()> {
-    let connection = initiate_connection(&stream)?;
+    let _connection = establish_connection(&stream)?;
     loop {
         let request = read_request(&stream);
+        println!("{request:#?}");
+        respond_request(&stream, request);
+        println!("responded");
     }
     Some(())
 }
-
-fn initiate_connection(stream: &TcpStream) -> Option<Connection> {
-    let connection = establish_connection(stream)?;
-    Some(connection)
-}
-
