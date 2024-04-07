@@ -1,6 +1,6 @@
-use std::{io::Write, net::TcpStream};
+use std::{io::{Read, Write}, net::TcpStream};
 
-use xaugh::{pad, ReadStruct, WriteStruct};
+use xaugh::{card16, pad};
 
 use crate::{
     pixmap::{PixmapFormat, DEFAULT_PIXMAP_FORMATS},
@@ -17,12 +17,12 @@ pub struct Connection {
 #[derive(Clone, Copy, Default, Debug)]
 pub struct ConnClientPrefix {
     endian: u8,
-    pad0: u8,
+    //pad0: u8,
     major: u16,
     minor: u16,
     n_auth_name: u16,
     d_auth_data: u16,
-    pad1: u16,
+    //pad1: u16,
 }
 
 #[repr(C)]
@@ -55,12 +55,17 @@ pub struct ConnSetup {
     pub pad2: u32,
 }
 
-impl ReadStruct for ConnClientPrefix {}
-impl WriteStruct for ConnSetupPrefix {}
-impl WriteStruct for ConnSetup {}
-
 pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
-    let client_prefix = ConnClientPrefix::read_struct(stream);
+    let mut client_prefix_bytes = [0u8;12];
+    stream.read(&mut client_prefix_bytes).ok()?;
+    let client_prefix = ConnClientPrefix {
+        endian: client_prefix_bytes[0],
+        major: card16(&client_prefix_bytes[2..]),
+        minor: card16(&client_prefix_bytes[4..]),
+        n_auth_name: card16(&client_prefix_bytes[6..]),
+        d_auth_data: card16(&client_prefix_bytes[8..]),
+    };
+    //let _auth_bytes = stream.read(&mut vec![0u8;(client_prefix.n_auth_name+pad(client_prefix.n_auth_name as usize) as u16+client_prefix.d_auth_data+pad(client_prefix.d_auth_data as usize) as u16) as usize]);
     let mut additional_data: Vec<u8> = vec![];
     additional_data.append(
         &mut unsafe {
@@ -156,14 +161,20 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
         }
         .to_vec(),
     );
-    ConnSetupPrefix {
+    let conn_setup_prefix = ConnSetupPrefix {
         success: 1,
         length_reason: 0,
         major: client_prefix.major,
         minor: client_prefix.minor,
         additional_length: additional_data.len() as u16 / 4,
-    }
-    .write_struct(stream);
+    };
+    stream.write(&[conn_setup_prefix.success, conn_setup_prefix.length_reason,
+        conn_setup_prefix.major.to_le_bytes()[0],
+        conn_setup_prefix.major.to_le_bytes()[1],
+        conn_setup_prefix.minor.to_le_bytes()[0],
+        conn_setup_prefix.minor.to_le_bytes()[1],
+        conn_setup_prefix.additional_length.to_le_bytes()[0],
+        conn_setup_prefix.additional_length.to_le_bytes()[1]]).ok();
 
     stream.write(&additional_data).ok()?;
     Some(Connection { sequence_number: 0 })
