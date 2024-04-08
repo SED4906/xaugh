@@ -20,17 +20,16 @@ fn main() {
 
     for stream in listener.incoming() {
         let stream = stream.unwrap();
-        thread::spawn(|| match handle_connection(stream) {
-            Some(()) => println!("Succeeded."),
-            None => println!("Failed."),
-        });
+        thread::spawn(|| {match handle_connection(stream) {
+            _ => {println!("Ended.")}
+        }});
     }
 }
 
 fn handle_connection(stream: TcpStream) -> Option<()> {
     let mut connection = establish_connection(&stream)?;
     loop {
-        let request = read_request(&stream);
+        let request = read_request(&stream)?;
         println!("{request:#?}");
         respond_request(&mut connection, &stream, request);
     }

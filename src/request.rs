@@ -23,7 +23,11 @@ pub enum Request {
         value_mask: u32,
         value_list: [u32; 15],
     },
-    ChangeWindowAttributes,
+    ChangeWindowAttributes {
+        wid: u32,
+        value_mask: u32,
+        value_list: [u32; 15],
+    },
     GetWindowAttributes,
     DestroyWindow,
     DestroySubwindows {
@@ -200,7 +204,7 @@ pub struct RequestPrefix {
     request_length: u16,
 }
 
-pub fn read_request(mut stream: &TcpStream) -> Request {
+pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
     let mut request_prefix_bytes = [0u8;4];
     stream.read(&mut request_prefix_bytes).unwrap();
     let request_prefix = RequestPrefix {
@@ -210,13 +214,9 @@ pub fn read_request(mut stream: &TcpStream) -> Request {
     };
     let mut request_bytes = vec![0; (request_prefix.request_length as usize).saturating_sub(1) * 4];
     stream.read(&mut request_bytes).unwrap();
-    match request_prefix.opcode {
+    Some(match request_prefix.opcode {
         0 => {
-            println!("remaining bytes when died of death:");
-            let mut buf = vec![];
-            stream.read_to_end(&mut buf).ok();
-            println!("{request_prefix_bytes:#?} {request_bytes:#?} {:#?}", buf);
-            panic!("augh");
+            return None;
         }
         1 => {
             let wid = card32(&request_bytes);
@@ -254,6 +254,34 @@ pub fn read_request(mut stream: &TcpStream) -> Request {
             }
             Request::CreateWindow { wid, parent, x, y, width, height, border_width, class, visual, value_mask, value_list }
         }
+        2 => {
+            let wid = card32(&request_bytes);
+            let value_mask = card32(&request_bytes[4..]);
+            let values = unsafe {
+                core::slice::from_raw_parts(
+                    core::ptr::from_ref(&request_bytes[8..])
+                        as *const u32,
+                    request_prefix.request_length as usize - 4,
+                )
+            };
+            let mut value_list = [0u32; 15];
+            for (index, value) in values.into_iter().enumerate() {
+                let mut times = 0;
+                let mut w = 0;
+                let which = loop {
+                    if value_mask & (1 << w) == 0 {
+                        w += 1;
+                    } else if times < index {
+                        times += 1;
+                        w += 1;
+                    } else {
+                        break w;
+                    }
+                };
+                value_list[which] = *value;
+            }
+            Request::ChangeWindowAttributes { wid, value_mask, value_list }
+        }
         5 => {
             Request::DestroySubwindows { window: card32(&request_bytes) }
         }
@@ -266,6 +294,9 @@ pub fn read_request(mut stream: &TcpStream) -> Request {
         20 => {
             Request::GetProperty { delete: request_prefix.extra,
                 window: card32(&request_bytes), property: card32(&request_bytes[4..]), typ: card32(&request_bytes[8..]), long_offset: card32(&request_bytes[12..]), long_length: card32(&request_bytes[16..]) }
+        }
+        36 => {
+            Request::GrabServer
         }
         43 => {
             Request::GetInputFocus
@@ -342,7 +373,7 @@ pub fn read_request(mut stream: &TcpStream) -> Request {
             }
         }
         _ => todo!("{}", request_prefix.opcode),
-    }
+    })
 }
 
 pub fn respond_request_empty(connection: &mut Connection, mut stream: &TcpStream, empty_following: usize) {
@@ -361,6 +392,7 @@ pub fn respond_request(connection: &mut Connection, stream: &TcpStream, request:
     connection.sequence_number += 1;
     match request {
         Request::CreateWindow { .. } => {}
+        Request::ChangeWindowAttributes { .. } => {}
         Request::DestroySubwindows { .. } => {}
         Request::InternAtom { .. } => {
             respond_request_empty(connection, stream, 0);
@@ -368,6 +400,7 @@ pub fn respond_request(connection: &mut Connection, stream: &TcpStream, request:
         Request::GetProperty { .. } => {
             respond_request_empty(connection, stream, 0);
         }
+        Request::GrabServer => {}
         Request::GetInputFocus => {
             respond_request_empty(connection, stream, 0);
         }
