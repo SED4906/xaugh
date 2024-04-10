@@ -28,17 +28,29 @@ pub enum Request {
         value_mask: u32,
         value_list: [u32; 15],
     },
-    GetWindowAttributes,
-    DestroyWindow,
+    GetWindowAttributes {
+        window: u32,
+    },
+    DestroyWindow {
+        window: u32,
+    },
     DestroySubwindows {
         window: u32,
     },
     ChangeSaveSet,
     ReparentWindow,
-    MapWindow,
-    MapSubwindows,
-    UnmapWindow,
-    UnmapSubwindows,
+    MapWindow {
+        window: u32,
+    },
+    MapSubwindows {
+        window: u32,
+    },
+    UnmapWindow {
+        window: u32,
+    },
+    UnmapSubwindows {
+        window: u32,
+    },
     ConfigureWindow,
     CirculateWindow,
     GetGeometry,
@@ -282,8 +294,28 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
             }
             Request::ChangeWindowAttributes { wid, value_mask, value_list }
         }
+        3 => {
+            let window = card32(&request_bytes);
+            Request::GetWindowAttributes { window }
+        }
+        4 => {
+            let window = card32(&request_bytes);
+            Request::DestroyWindow { window }
+        }
         5 => {
             Request::DestroySubwindows { window: card32(&request_bytes) }
+        }
+        8 => {
+            Request::MapWindow { window: card32(&request_bytes) }
+        }
+        9 => {
+            Request::MapSubwindows { window: card32(&request_bytes) }
+        }
+        10 => {
+            Request::UnmapWindow { window: card32(&request_bytes) }
+        }
+        11 => {
+            Request::UnmapSubwindows { window: card32(&request_bytes) }
         }
         16 => {
             Request::InternAtom {
@@ -372,19 +404,18 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
                 name: String::from_utf8_lossy(&request_bytes[4..card16(&request_bytes) as usize + 4]).to_string(),
             }
         }
+        103 => Request::GetKeyboardControl,
         _ => todo!("{}", request_prefix.opcode),
     })
 }
 
-pub fn respond_request_empty(connection: &mut Connection, mut stream: &TcpStream, empty_following: usize) {
+pub fn respond_request_empty(connection: &mut Connection, mut stream: &TcpStream, extra_length: u32) {
     println!("(not really implemented)");
-    let mut bytes = vec![
-        1, 0, connection.sequence_number.to_le_bytes()[0], connection.sequence_number.to_le_bytes()[1], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0,
-    ];
-    if empty_following > 0 {bytes.append(&mut vec![0u8;empty_following*4])};
+    let mut bytes_to_write =vec![1, 0, connection.sequence_number.to_le_bytes()[0], connection.sequence_number.to_le_bytes()[1], extra_length.to_le_bytes()[0], extra_length.to_le_bytes()[1], extra_length.to_le_bytes()[2], extra_length.to_le_bytes()[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0,];
+    bytes_to_write.append(&mut vec![0;4*extra_length as usize]);
     stream
-        .write(&bytes)
+        .write(&bytes_to_write)
         .unwrap();
 }
 
@@ -411,13 +442,19 @@ pub fn respond_request(connection: &mut Connection, stream: &TcpStream, request:
         Request::ListFonts { .. } => {
             respond_request_empty(connection, stream, 0);
         }
+        Request::GetWindowAttributes { .. } => {
+            respond_request_empty(connection, stream, 0);
+        }
         Request::CreatePixmap { .. } => {}
         Request::FreePixmap { .. } => {}
         Request::CreateGC { .. } => {}
         Request::FreeGC { .. } => {}
         Request::PutImage { .. } => {}
-        Request::QueryExtension { name:_ } => {
+        Request::QueryExtension { .. } => {
             respond_request_empty(connection, stream, 0);
+        }
+        Request::GetKeyboardControl => {
+            respond_request_empty(connection, stream, 5);
         }
         _ => todo!("response")
     }
