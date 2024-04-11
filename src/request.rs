@@ -37,8 +37,16 @@ pub enum Request {
     DestroySubwindows {
         window: u32,
     },
-    ChangeSaveSet,
-    ReparentWindow,
+    ChangeSaveSet {
+        mode: u8,
+        window: u32,
+    },
+    ReparentWindow {
+        window: u32,
+        parent: u32,
+        x: u16,
+        y: u16,
+    },
     MapWindow {
         window: u32,
     },
@@ -51,12 +59,20 @@ pub enum Request {
     UnmapSubwindows {
         window: u32,
     },
-    ConfigureWindow,
-    CirculateWindow,
+    ConfigureWindow {
+        window: u32,
+        values: ConfigureValues,
+    },
+    CirculateWindow {
+        direction: u8,
+        window: u32,
+    },
     GetGeometry {
         drawable: u32,
     },
-    QueryTree,
+    QueryTree {
+        window: u32,
+    },
     InternAtom {
         only_if_exists: u8,
         name: String
@@ -214,6 +230,18 @@ pub enum Request {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+pub struct ConfigureValues {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    border_width: u32,
+    sibling: u32,
+    stack_mode: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct WindowAttributes {
     background_pixmap: u32,
     background_pixel: u32,
@@ -357,6 +385,12 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
         5 => {
             Request::DestroySubwindows { window: card32(&request_bytes) }
         }
+        6 => {
+            Request::ChangeSaveSet { mode: request_prefix.extra, window: card32(&request_bytes) }
+        }
+        7 => {
+            Request::ReparentWindow { window: card32(&request_bytes), parent: card32(&request_bytes[4..]), x: card16(&request_bytes[6..]), y: card16(&request_bytes[8..]) }
+        }
         8 => {
             Request::MapWindow { window: card32(&request_bytes) }
         }
@@ -369,8 +403,48 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
         11 => {
             Request::UnmapSubwindows { window: card32(&request_bytes) }
         }
+        12 => {
+            let window = card32(&request_bytes);
+            let value_mask = card16(&request_bytes[4..]);
+            let value_list = &copy8to32(&request_bytes[8..]);
+            let mut values = ConfigureValues::default();
+            for (index, value) in value_list.into_iter().enumerate() {
+                let mut times = 0;
+                let mut w = 0;
+                let which = loop {
+                    if w >= 16 {
+                        panic!("bit mask error");
+                    }
+                    if value_mask & (1 << w) == 0 {
+                        w += 1;
+                    } else if times < index {
+                        times += 1;
+                        w += 1;
+                    } else {
+                        break w;
+                    }
+                };
+                match which {
+                    0 => values.x = *value,
+                    1 => values.y = *value,
+                    2 => values.width = *value,
+                    3 => values.height = *value,
+                    4 => values.border_width = *value,
+                    5 => values.sibling = *value,
+                    6 => values.stack_mode = *value,
+                    _ => panic!("invalid bit in window attribute mask"),
+                }
+            }
+            Request::ConfigureWindow { window, values }
+        }
+        13 => {
+            Request::CirculateWindow { direction: request_prefix.extra, window: card32(&request_bytes) }
+        }
         14 => {
             Request::GetGeometry { drawable: card32(&request_bytes) }
+        }
+        15 => {
+            Request::QueryTree { window: card32(&request_bytes) }
         }
         16 => {
             Request::InternAtom {
@@ -476,8 +550,23 @@ pub fn respond_request(connection: &mut Connection, stream: &TcpStream, request:
     match request {
         Request::CreateWindow { .. } => {}
         Request::ChangeWindowAttributes { .. } => {}
+        Request::GetWindowAttributes { .. } => {
+            respond_request_empty(connection, stream, 0);
+        }
+        Request::DestroyWindow { .. } => {}
         Request::DestroySubwindows { .. } => {}
+        Request::ChangeSaveSet { .. } => {}
+        Request::ReparentWindow { .. } => {}
+        Request::MapWindow { .. } => {}
+        Request::MapSubwindows { .. } => {}
+        Request::UnmapWindow { .. } => {}
+        Request::UnmapSubwindows { .. } => {}
+        Request::ConfigureWindow { .. } => {}
+        Request::CirculateWindow { .. } => {}
         Request::GetGeometry { .. } => {
+            respond_request_empty(connection, stream, 0);
+        }
+        Request::QueryTree { .. } => {
             respond_request_empty(connection, stream, 0);
         }
         Request::InternAtom { .. } => {
@@ -498,9 +587,6 @@ pub fn respond_request(connection: &mut Connection, stream: &TcpStream, request:
             respond_request_empty(connection, stream, 0);
         }
         Request::ListFonts { .. } => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::GetWindowAttributes { .. } => {
             respond_request_empty(connection, stream, 0);
         }
         Request::CreatePixmap { .. } => {}
