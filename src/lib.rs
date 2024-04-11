@@ -17,3 +17,11 @@ pub fn card16(bytes: &[u8]) -> u16 {
 pub fn int16(bytes: &[u8]) -> i16 {
     card16(bytes) as i16
 }
+
+pub fn copy8to32(source: &[u8]) -> Vec<u32> {
+    let mut target = vec![];
+    for (index,chunk) in source.chunks(4).enumerate() {
+        target.push(card32(chunk));
+    }
+    target
+}

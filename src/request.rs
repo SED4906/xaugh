@@ -3,7 +3,7 @@ use std::{
     net::TcpStream,
 };
 
-use xaugh::{card16, card32, int16};
+use xaugh::{card16, card32, copy8to32, int16};
 
 use crate::connection::{self, Connection};
 
@@ -20,13 +20,13 @@ pub enum Request {
         border_width: u16,
         class: u16,
         visual: u32,
-        value_mask: u32,
-        value_list: [u32; 15],
+        values: WindowAttributes,
+        //value_mask: u32,
+        //value_list: [u32; 15],
     },
     ChangeWindowAttributes {
         wid: u32,
-        value_mask: u32,
-        value_list: [u32; 15],
+        values: WindowAttributes,
     },
     GetWindowAttributes {
         window: u32,
@@ -53,7 +53,9 @@ pub enum Request {
     },
     ConfigureWindow,
     CirculateWindow,
-    GetGeometry,
+    GetGeometry {
+        drawable: u32,
+    },
     QueryTree,
     InternAtom {
         only_if_exists: u8,
@@ -73,7 +75,9 @@ pub enum Request {
     RotateProperties,
     ListProperties,
     SetSelectionOwner,
-    GetSelectionOwner,
+    GetSelectionOwner {
+        selection: u32,
+    },
     ConvertSelection,
     SendEvent,
     GrabPointer,
@@ -209,6 +213,26 @@ pub enum Request {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WindowAttributes {
+    background_pixmap: u32,
+    background_pixel: u32,
+    border_pixmap: u32,
+    border_pixel: u32,
+    border_gravity: u32,
+    win_gravity: u32,
+    backing_store: u32,
+    backing_planes: u32,
+    backing_pixel: u32,
+    override_redirect: u32,
+    save_under: u32,
+    event_mask: u32,
+    do_not_propogate_mask: u32,
+    colormap: u32,
+    cursor: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RequestPrefix {
     opcode: u8, 
@@ -241,18 +265,15 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
             let class = card16(&request_bytes[18..]);
             let visual = card32(&request_bytes[20..]);
             let value_mask = card32(&request_bytes[24..]);
-            let values = unsafe {
-                core::slice::from_raw_parts(
-                    core::ptr::from_ref(&request_bytes[28..])
-                        as *const u32,
-                    request_prefix.request_length as usize - 9,
-                )
-            };
-            let mut value_list = [0u32; 15];
-            for (index, value) in values.into_iter().enumerate() {
+            let value_list = &copy8to32(&request_bytes[28..]);
+            let mut values = WindowAttributes::default();
+            for (index, value) in value_list.into_iter().enumerate() {
                 let mut times = 0;
                 let mut w = 0;
                 let which = loop {
+                    if w >= 32 {
+                        panic!("bit mask error");
+                    }
                     if value_mask & (1 << w) == 0 {
                         w += 1;
                     } else if times < index {
@@ -262,25 +283,39 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
                         break w;
                     }
                 };
-                value_list[which] = *value;
+                match which {
+                    0 => values.background_pixmap = *value,
+                    1 => values.background_pixel = *value,
+                    2 => values.border_pixmap = *value,
+                    3 => values.border_pixel = *value,
+                    4 => values.border_gravity = *value,
+                    5 => values.win_gravity = *value,
+                    6 => values.backing_store = *value,
+                    7 => values.backing_planes = *value,
+                    8 => values.backing_pixel = *value,
+                    9 => values.override_redirect = *value,
+                    10 => values.save_under = *value,
+                    11 => values.event_mask = *value,
+                    12 => values.do_not_propogate_mask = *value,
+                    13 => values.colormap = *value,
+                    14 => values.cursor = *value,
+                    _ => panic!("invalid bit in window attribute mask"),
+                }
             }
-            Request::CreateWindow { wid, parent, x, y, width, height, border_width, class, visual, value_mask, value_list }
+            Request::CreateWindow { wid, parent, x, y, width, height, border_width, class, visual, values }
         }
         2 => {
             let wid = card32(&request_bytes);
             let value_mask = card32(&request_bytes[4..]);
-            let values = unsafe {
-                core::slice::from_raw_parts(
-                    core::ptr::from_ref(&request_bytes[8..])
-                        as *const u32,
-                    request_prefix.request_length as usize - 4,
-                )
-            };
-            let mut value_list = [0u32; 15];
-            for (index, value) in values.into_iter().enumerate() {
+            let value_list = &copy8to32(&request_bytes[8..]);
+            let mut values = WindowAttributes::default();
+            for (index, value) in value_list.into_iter().enumerate() {
                 let mut times = 0;
                 let mut w = 0;
                 let which = loop {
+                    if w >= 32 {
+                        panic!("bit mask error");
+                    }
                     if value_mask & (1 << w) == 0 {
                         w += 1;
                     } else if times < index {
@@ -290,9 +325,26 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
                         break w;
                     }
                 };
-                value_list[which] = *value;
+                match which {
+                    0 => values.background_pixmap = *value,
+                    1 => values.background_pixel = *value,
+                    2 => values.border_pixmap = *value,
+                    3 => values.border_pixel = *value,
+                    4 => values.border_gravity = *value,
+                    5 => values.win_gravity = *value,
+                    6 => values.backing_store = *value,
+                    7 => values.backing_planes = *value,
+                    8 => values.backing_pixel = *value,
+                    9 => values.override_redirect = *value,
+                    10 => values.save_under = *value,
+                    11 => values.event_mask = *value,
+                    12 => values.do_not_propogate_mask = *value,
+                    13 => values.colormap = *value,
+                    14 => values.cursor = *value,
+                    _ => panic!("invalid bit in window attribute mask"),
+                }
             }
-            Request::ChangeWindowAttributes { wid, value_mask, value_list }
+            Request::ChangeWindowAttributes { wid, values }
         }
         3 => {
             let window = card32(&request_bytes);
@@ -317,6 +369,9 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
         11 => {
             Request::UnmapSubwindows { window: card32(&request_bytes) }
         }
+        14 => {
+            Request::GetGeometry { drawable: card32(&request_bytes) }
+        }
         16 => {
             Request::InternAtom {
                 only_if_exists: request_prefix.extra,
@@ -326,6 +381,9 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
         20 => {
             Request::GetProperty { delete: request_prefix.extra,
                 window: card32(&request_bytes), property: card32(&request_bytes[4..]), typ: card32(&request_bytes[8..]), long_offset: card32(&request_bytes[12..]), long_length: card32(&request_bytes[16..]) }
+        }
+        23 => {
+            Request::GetSelectionOwner { selection: card32(&request_bytes) }
         }
         36 => {
             Request::GrabServer
@@ -353,13 +411,7 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
             let drawable = card32(&request_bytes[4..]);
             let value_mask = card32(&request_bytes[8..]);
             let mut value_list = [0u32; 23];
-            let values = unsafe {
-                core::slice::from_raw_parts(
-                    core::ptr::from_ref(&request_bytes[12..])
-                        as *const u32,
-                    request_prefix.request_length as usize - 4,
-                )
-            };
+            let values =  &copy8to32(&request_bytes[12..]);
             for (index, value) in values.into_iter().enumerate() {
                 let which = loop {
                     let mut times = 0;
@@ -425,10 +477,16 @@ pub fn respond_request(connection: &mut Connection, stream: &TcpStream, request:
         Request::CreateWindow { .. } => {}
         Request::ChangeWindowAttributes { .. } => {}
         Request::DestroySubwindows { .. } => {}
+        Request::GetGeometry { .. } => {
+            respond_request_empty(connection, stream, 0);
+        }
         Request::InternAtom { .. } => {
             respond_request_empty(connection, stream, 0);
         }
         Request::GetProperty { .. } => {
+            respond_request_empty(connection, stream, 0);
+        }
+        Request::GetSelectionOwner { .. } => {
             respond_request_empty(connection, stream, 0);
         }
         Request::GrabServer => {}
