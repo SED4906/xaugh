@@ -31,7 +31,7 @@ pub struct Depth {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Visual {
-    pub visual_id: u32, 
+    pub visual_id: u32,
     pub class: u8,
     pub bits_per_rgb_val: u8,
     pub colormap_entries: u16,

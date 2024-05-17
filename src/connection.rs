@@ -1,6 +1,9 @@
-use std::{io::{Read, Write}, net::TcpStream};
+use std::{
+    io::{Read, Write},
+    net::TcpStream,
+};
 
-use xaugh::{card16, pad};
+use crate::{card16, pad};
 
 use crate::{
     pixmap::{PixmapFormat, DEFAULT_PIXMAP_FORMATS},
@@ -10,7 +13,15 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Connection {
+    pub endianness: Endianness,
     pub sequence_number: u16,
+}
+
+#[derive(Clone, Debug)]
+#[repr(u8)]
+pub enum Endianness {
+    Big = b'B',
+    Little = b'l',
 }
 
 #[repr(C)]
@@ -56,15 +67,45 @@ pub struct ConnSetup {
 }
 
 pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
-    let mut client_prefix_bytes = [0u8;12];
+    let mut client_prefix_bytes = [0u8; 12];
     stream.read(&mut client_prefix_bytes).ok()?;
+    let endianness = match client_prefix_bytes[0] {
+        b'B' => Endianness::Big,
+        b'l' => Endianness::Little,
+        _ => panic!("invalid endianness {}", client_prefix_bytes[0]),
+    };
     let client_prefix = ConnClientPrefix {
         endian: client_prefix_bytes[0],
-        major: card16(&client_prefix_bytes[2..]),
-        minor: card16(&client_prefix_bytes[4..]),
-        n_auth_name: card16(&client_prefix_bytes[6..]),
-        d_auth_data: card16(&client_prefix_bytes[8..]),
+        major: card16(
+            &Connection {
+                endianness: endianness.clone(),
+                sequence_number: 0,
+            },
+            &client_prefix_bytes[2..],
+        ),
+        minor: card16(
+            &Connection {
+                endianness: endianness.clone(),
+                sequence_number: 0,
+            },
+            &client_prefix_bytes[4..],
+        ),
+        n_auth_name: card16(
+            &Connection {
+                endianness: endianness.clone(),
+                sequence_number: 0,
+            },
+            &client_prefix_bytes[6..],
+        ),
+        d_auth_data: card16(
+            &Connection {
+                endianness: endianness.clone(),
+                sequence_number: 0,
+            },
+            &client_prefix_bytes[8..],
+        ),
     };
+
     //let _auth_bytes = stream.read(&mut vec![0u8;(client_prefix.n_auth_name+pad(client_prefix.n_auth_name as usize) as u16+client_prefix.d_auth_data+pad(client_prefix.d_auth_data as usize) as u16) as usize]);
     let mut additional_data: Vec<u8> = vec![];
     additional_data.append(
@@ -168,14 +209,22 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
         minor: client_prefix.minor,
         additional_length: additional_data.len() as u16 / 4,
     };
-    stream.write(&[conn_setup_prefix.success, conn_setup_prefix.length_reason,
-        conn_setup_prefix.major.to_le_bytes()[0],
-        conn_setup_prefix.major.to_le_bytes()[1],
-        conn_setup_prefix.minor.to_le_bytes()[0],
-        conn_setup_prefix.minor.to_le_bytes()[1],
-        conn_setup_prefix.additional_length.to_le_bytes()[0],
-        conn_setup_prefix.additional_length.to_le_bytes()[1]]).ok();
+    stream
+        .write(&[
+            conn_setup_prefix.success,
+            conn_setup_prefix.length_reason,
+            conn_setup_prefix.major.to_le_bytes()[0],
+            conn_setup_prefix.major.to_le_bytes()[1],
+            conn_setup_prefix.minor.to_le_bytes()[0],
+            conn_setup_prefix.minor.to_le_bytes()[1],
+            conn_setup_prefix.additional_length.to_le_bytes()[0],
+            conn_setup_prefix.additional_length.to_le_bytes()[1],
+        ])
+        .ok();
 
     stream.write(&additional_data).ok()?;
-    Some(Connection { sequence_number: 0 })
+    Some(Connection {
+        endianness,
+        sequence_number: 0,
+    })
 }

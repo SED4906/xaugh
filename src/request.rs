@@ -1,17 +1,17 @@
 use std::{
-    io::{Read, Write},
+    io::Read,
     net::TcpStream,
 };
 
-use xaugh::{card16, card32, copy8to32, int16};
+use crate::{card16, card32, copy8to32, int16};
 
-use crate::connection::{self, Connection};
+use crate::connection::Connection;
 
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub enum Request {
     CreateWindow {
-        wid: u32,
+        window: u32,
         parent: u32,
         x: u16,
         y: u16,
@@ -21,11 +21,9 @@ pub enum Request {
         class: u16,
         visual: u32,
         values: WindowAttributes,
-        //value_mask: u32,
-        //value_list: [u32; 15],
     },
     ChangeWindowAttributes {
-        wid: u32,
+        window: u32,
         values: WindowAttributes,
     },
     GetWindowAttributes {
@@ -75,11 +73,23 @@ pub enum Request {
     },
     InternAtom {
         only_if_exists: u8,
-        name: String
+        name: String,
     },
-    GetAtomName,
-    ChangeProperty,
-    DeleteProperty,
+    GetAtomName {
+        atom: u32,
+    },
+    ChangeProperty {
+        mode: u8,
+        window: u32,
+        property: u32,
+        ptype: u32,
+        format: u8,
+        data: Vec<u8>,
+    },
+    DeleteProperty {
+        window: u32,
+        property: u32,
+    },
     GetProperty {
         delete: u8,
         window: u32,
@@ -145,14 +155,14 @@ pub enum Request {
         cid: u32,
         drawable: u32,
         value_mask: u32,
-        value_list: [u32;23],
+        value_list: [u32; 23],
     },
     ChangeGC,
     CopyGC,
     SetDashes,
     SetClipRectangles,
     FreeGC {
-        gc: u32
+        gc: u32,
     },
     ClearArea,
     CopyArea,
@@ -175,7 +185,7 @@ pub enum Request {
         dsty: i16,
         leftpad: u8,
         depth: u8,
-        data: Vec<u8>
+        data: Vec<u8>,
     },
     GetImage,
     PolyText8,
@@ -263,18 +273,18 @@ pub struct WindowAttributes {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RequestPrefix {
-    opcode: u8, 
+    opcode: u8,
     extra: u8,
     request_length: u16,
 }
 
-pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
-    let mut request_prefix_bytes = [0u8;4];
+pub fn read_request(connection: &Connection, mut stream: &TcpStream) -> Option<Request> {
+    let mut request_prefix_bytes = [0u8; 4];
     stream.read(&mut request_prefix_bytes).unwrap();
     let request_prefix = RequestPrefix {
         opcode: request_prefix_bytes[0],
         extra: request_prefix_bytes[1],
-        request_length: card16(&request_prefix_bytes[2..]),
+        request_length: card16(connection, &request_prefix_bytes[2..]),
     };
     let mut request_bytes = vec![0; (request_prefix.request_length as usize).saturating_sub(1) * 4];
     stream.read(&mut request_bytes).unwrap();
@@ -283,17 +293,17 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
             return None;
         }
         1 => {
-            let wid = card32(&request_bytes);
-            let parent = card32(&request_bytes[4..]);
-            let x = card16(&request_bytes[8..]);
-            let y = card16(&request_bytes[10..]);
-            let width = card16(&request_bytes[12..]);
-            let height = card16(&request_bytes[14..]);
-            let border_width = card16(&request_bytes[16..]);
-            let class = card16(&request_bytes[18..]);
-            let visual = card32(&request_bytes[20..]);
-            let value_mask = card32(&request_bytes[24..]);
-            let value_list = &copy8to32(&request_bytes[28..]);
+            let window = card32(connection, &request_bytes);
+            let parent = card32(connection, &request_bytes[4..]);
+            let x = card16(connection, &request_bytes[8..]);
+            let y = card16(connection, &request_bytes[10..]);
+            let width = card16(connection, &request_bytes[12..]);
+            let height = card16(connection, &request_bytes[14..]);
+            let border_width = card16(connection, &request_bytes[16..]);
+            let class = card16(connection, &request_bytes[18..]);
+            let visual = card32(connection, &request_bytes[20..]);
+            let value_mask = card32(connection, &request_bytes[24..]);
+            let value_list = &copy8to32(connection, &request_bytes[28..]);
             let mut values = WindowAttributes::default();
             for (index, value) in value_list.into_iter().enumerate() {
                 let mut times = 0;
@@ -330,12 +340,23 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
                     _ => panic!("invalid bit in window attribute mask"),
                 }
             }
-            Request::CreateWindow { wid, parent, x, y, width, height, border_width, class, visual, values }
+            Request::CreateWindow {
+                window,
+                parent,
+                x,
+                y,
+                width,
+                height,
+                border_width,
+                class,
+                visual,
+                values,
+            }
         }
         2 => {
-            let wid = card32(&request_bytes);
-            let value_mask = card32(&request_bytes[4..]);
-            let value_list = &copy8to32(&request_bytes[8..]);
+            let window = card32(connection, &request_bytes);
+            let value_mask = card32(connection, &request_bytes[4..]);
+            let value_list = &copy8to32(connection, &request_bytes[8..]);
             let mut values = WindowAttributes::default();
             for (index, value) in value_list.into_iter().enumerate() {
                 let mut times = 0;
@@ -372,41 +393,45 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
                     _ => panic!("invalid bit in window attribute mask"),
                 }
             }
-            Request::ChangeWindowAttributes { wid, values }
+            Request::ChangeWindowAttributes { window, values }
         }
         3 => {
-            let window = card32(&request_bytes);
+            let window = card32(connection, &request_bytes);
             Request::GetWindowAttributes { window }
         }
         4 => {
-            let window = card32(&request_bytes);
+            let window = card32(connection, &request_bytes);
             Request::DestroyWindow { window }
         }
-        5 => {
-            Request::DestroySubwindows { window: card32(&request_bytes) }
-        }
-        6 => {
-            Request::ChangeSaveSet { mode: request_prefix.extra, window: card32(&request_bytes) }
-        }
-        7 => {
-            Request::ReparentWindow { window: card32(&request_bytes), parent: card32(&request_bytes[4..]), x: card16(&request_bytes[6..]), y: card16(&request_bytes[8..]) }
-        }
-        8 => {
-            Request::MapWindow { window: card32(&request_bytes) }
-        }
-        9 => {
-            Request::MapSubwindows { window: card32(&request_bytes) }
-        }
-        10 => {
-            Request::UnmapWindow { window: card32(&request_bytes) }
-        }
-        11 => {
-            Request::UnmapSubwindows { window: card32(&request_bytes) }
-        }
+        5 => Request::DestroySubwindows {
+            window: card32(connection, &request_bytes),
+        },
+        6 => Request::ChangeSaveSet {
+            mode: request_prefix.extra,
+            window: card32(connection, &request_bytes),
+        },
+        7 => Request::ReparentWindow {
+            window: card32(connection, &request_bytes),
+            parent: card32(connection, &request_bytes[4..]),
+            x: card16(connection, &request_bytes[6..]),
+            y: card16(connection, &request_bytes[8..]),
+        },
+        8 => Request::MapWindow {
+            window: card32(connection, &request_bytes),
+        },
+        9 => Request::MapSubwindows {
+            window: card32(connection, &request_bytes),
+        },
+        10 => Request::UnmapWindow {
+            window: card32(connection, &request_bytes),
+        },
+        11 => Request::UnmapSubwindows {
+            window: card32(connection, &request_bytes),
+        },
         12 => {
-            let window = card32(&request_bytes);
-            let value_mask = card16(&request_bytes[4..]);
-            let value_list = &copy8to32(&request_bytes[8..]);
+            let window = card32(connection, &request_bytes);
+            let value_mask = card16(connection, &request_bytes[4..]);
+            let value_list = &copy8to32(connection, &request_bytes[8..]);
             let mut values = ConfigureValues::default();
             for (index, value) in value_list.into_iter().enumerate() {
                 let mut times = 0;
@@ -437,59 +462,94 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
             }
             Request::ConfigureWindow { window, values }
         }
-        13 => {
-            Request::CirculateWindow { direction: request_prefix.extra, window: card32(&request_bytes) }
-        }
-        14 => {
-            Request::GetGeometry { drawable: card32(&request_bytes) }
-        }
-        15 => {
-            Request::QueryTree { window: card32(&request_bytes) }
-        }
-        16 => {
-            Request::InternAtom {
-                only_if_exists: request_prefix.extra,
-                name: String::from_utf8_lossy(&request_bytes[4..card16(&request_bytes) as usize + 4]).to_string(),
+        13 => Request::CirculateWindow {
+            direction: request_prefix.extra,
+            window: card32(connection, &request_bytes),
+        },
+        14 => Request::GetGeometry {
+            drawable: card32(connection, &request_bytes),
+        },
+        15 => Request::QueryTree {
+            window: card32(connection, &request_bytes),
+        },
+        16 => Request::InternAtom {
+            only_if_exists: request_prefix.extra,
+            name: String::from_utf8_lossy(
+                &request_bytes[4..card16(connection, &request_bytes) as usize + 4],
+            )
+            .to_string(),
+        },
+        17 => Request::GetAtomName {
+            atom: card32(connection, &request_bytes),
+        },
+        18 => {
+            let mut data = request_bytes[20..].to_vec();
+            data.truncate(
+                (request_bytes[12] as usize) * card32(connection, &request_bytes[16..]) as usize,
+            );
+            Request::ChangeProperty {
+                mode: request_prefix.extra,
+                window: card32(connection, &request_bytes),
+                property: card32(connection, &request_bytes[4..]),
+                ptype: card32(connection, &request_bytes[8..]),
+                format: request_bytes[12],
+                data,
             }
         }
-        20 => {
-            Request::GetProperty { delete: request_prefix.extra,
-                window: card32(&request_bytes), property: card32(&request_bytes[4..]), typ: card32(&request_bytes[8..]), long_offset: card32(&request_bytes[12..]), long_length: card32(&request_bytes[16..]) }
-        }
-        23 => {
-            Request::GetSelectionOwner { selection: card32(&request_bytes) }
-        }
-        36 => {
-            Request::GrabServer
-        }
-        43 => {
-            Request::GetInputFocus
-        }
-        45 => {
-            Request::OpenFont { fid: card32(&request_bytes), name: String::from_utf8_lossy(&request_bytes[8..card16(&request_bytes[4..]) as usize + 8]).to_string() }
-        }
-        47 => {
-            Request::QueryFont { fid: card32(&request_bytes) }
-        }
-        49 => {
-            Request::ListFonts { max_names: card16(&request_bytes), pattern: String::from_utf8_lossy(&request_bytes[4..card16(&request_bytes[2..]) as usize + 4]).to_string() }
-        }
-        53 => {
-            Request::CreatePixmap { depth: request_prefix.extra, pid: card32(&request_bytes), drawable: card32(&request_bytes[4..]), width: card16(&request_bytes[8..]), height: card16(&request_bytes[10..]) }
-        }
-        54 => {
-            Request::FreePixmap { pixmap: card32(&request_bytes) }
-        }
+        19 => Request::DeleteProperty {
+            window: card32(connection, &request_bytes),
+            property: card32(connection, &request_bytes[4..]),
+        },
+        20 => Request::GetProperty {
+            delete: request_prefix.extra,
+            window: card32(connection, &request_bytes),
+            property: card32(connection, &request_bytes[4..]),
+            typ: card32(connection, &request_bytes[8..]),
+            long_offset: card32(connection, &request_bytes[12..]),
+            long_length: card32(connection, &request_bytes[16..]),
+        },
+        23 => Request::GetSelectionOwner {
+            selection: card32(connection, &request_bytes),
+        },
+        36 => Request::GrabServer,
+        43 => Request::GetInputFocus,
+        45 => Request::OpenFont {
+            fid: card32(connection, &request_bytes),
+            name: String::from_utf8_lossy(
+                &request_bytes[8..card16(connection, &request_bytes[4..]) as usize + 8],
+            )
+            .to_string(),
+        },
+        47 => Request::QueryFont {
+            fid: card32(connection, &request_bytes),
+        },
+        49 => Request::ListFonts {
+            max_names: card16(connection, &request_bytes),
+            pattern: String::from_utf8_lossy(
+                &request_bytes[4..card16(connection, &request_bytes[2..]) as usize + 4],
+            )
+            .to_string(),
+        },
+        53 => Request::CreatePixmap {
+            depth: request_prefix.extra,
+            pid: card32(connection, &request_bytes),
+            drawable: card32(connection, &request_bytes[4..]),
+            width: card16(connection, &request_bytes[8..]),
+            height: card16(connection, &request_bytes[10..]),
+        },
+        54 => Request::FreePixmap {
+            pixmap: card32(connection, &request_bytes),
+        },
         55 => {
-            let cid = card32(&request_bytes);
-            let drawable = card32(&request_bytes[4..]);
-            let value_mask = card32(&request_bytes[8..]);
+            let cid = card32(connection, &request_bytes);
+            let drawable = card32(connection, &request_bytes[4..]);
+            let value_mask = card32(connection, &request_bytes[8..]);
             let mut value_list = [0u32; 23];
-            let values =  &copy8to32(&request_bytes[12..]);
+            let values = &copy8to32(connection, &request_bytes[12..]);
             for (index, value) in values.into_iter().enumerate() {
+                let mut times = 0;
+                let mut w = 0;
                 let which = loop {
-                    let mut times = 0;
-                    let mut w = 0;
                     if value_mask & (1 << w) == 0 {
                         w += 1;
                     } else if times < index {
@@ -508,98 +568,29 @@ pub fn read_request(mut stream: &TcpStream) -> Option<Request> {
                 value_list,
             }
         }
-        60 => {
-            Request::FreeGC { gc: card32(&request_bytes) }
-        }
-        72 => {
-            Request::PutImage {
-                format: request_prefix.extra,
-                drawable: card32(&request_bytes),
-                gc: card32(&request_bytes[4..]),
-                width: card16(&request_bytes[8..]),
-                height: card16(&request_bytes[10..]),
-                dstx: int16(&request_bytes[12..]),
-                dsty: int16(&request_bytes[14..]),
-                leftpad: request_bytes[16],
-                depth: request_bytes[17],
-                data: request_bytes[20..].to_vec(),
-            }
-        }
-        98 => {
-            Request::QueryExtension {
-                name: String::from_utf8_lossy(&request_bytes[4..card16(&request_bytes) as usize + 4]).to_string(),
-            }
-        }
+        60 => Request::FreeGC {
+            gc: card32(connection, &request_bytes),
+        },
+        72 => Request::PutImage {
+            format: request_prefix.extra,
+            drawable: card32(connection, &request_bytes),
+            gc: card32(connection, &request_bytes[4..]),
+            width: card16(connection, &request_bytes[8..]),
+            height: card16(connection, &request_bytes[10..]),
+            dstx: int16(connection, &request_bytes[12..]),
+            dsty: int16(connection, &request_bytes[14..]),
+            leftpad: request_bytes[16],
+            depth: request_bytes[17],
+            data: request_bytes[20..].to_vec(),
+        },
+        98 => Request::QueryExtension {
+            name: String::from_utf8_lossy(
+                &request_bytes[4..card16(connection, &request_bytes) as usize + 4],
+            )
+            .to_string(),
+        },
         103 => Request::GetKeyboardControl,
+        127 => Request::NoOperation,
         _ => todo!("{}", request_prefix.opcode),
     })
-}
-
-pub fn respond_request_empty(connection: &mut Connection, mut stream: &TcpStream, extra_length: u32) {
-    println!("(not really implemented)");
-    let mut bytes_to_write =vec![1, 0, connection.sequence_number.to_le_bytes()[0], connection.sequence_number.to_le_bytes()[1], extra_length.to_le_bytes()[0], extra_length.to_le_bytes()[1], extra_length.to_le_bytes()[2], extra_length.to_le_bytes()[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0,];
-    bytes_to_write.append(&mut vec![0;4*extra_length as usize]);
-    stream
-        .write(&bytes_to_write)
-        .unwrap();
-}
-
-pub fn respond_request(connection: &mut Connection, stream: &TcpStream, request: Request) {
-    connection.sequence_number += 1;
-    match request {
-        Request::CreateWindow { .. } => {}
-        Request::ChangeWindowAttributes { .. } => {}
-        Request::GetWindowAttributes { .. } => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::DestroyWindow { .. } => {}
-        Request::DestroySubwindows { .. } => {}
-        Request::ChangeSaveSet { .. } => {}
-        Request::ReparentWindow { .. } => {}
-        Request::MapWindow { .. } => {}
-        Request::MapSubwindows { .. } => {}
-        Request::UnmapWindow { .. } => {}
-        Request::UnmapSubwindows { .. } => {}
-        Request::ConfigureWindow { .. } => {}
-        Request::CirculateWindow { .. } => {}
-        Request::GetGeometry { .. } => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::QueryTree { .. } => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::InternAtom { .. } => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::GetProperty { .. } => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::GetSelectionOwner { .. } => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::GrabServer => {}
-        Request::GetInputFocus => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::OpenFont { .. } => {}
-        Request::QueryFont { .. } => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::ListFonts { .. } => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::CreatePixmap { .. } => {}
-        Request::FreePixmap { .. } => {}
-        Request::CreateGC { .. } => {}
-        Request::FreeGC { .. } => {}
-        Request::PutImage { .. } => {}
-        Request::QueryExtension { .. } => {
-            respond_request_empty(connection, stream, 0);
-        }
-        Request::GetKeyboardControl => {
-            respond_request_empty(connection, stream, 5);
-        }
-        _ => todo!("response")
-    }
 }
