@@ -3,26 +3,11 @@ use std::{
     net::TcpStream,
 };
 
-use crate::{card16, pad};
-
 use crate::{
-    pixmap::{PixmapFormat, DEFAULT_PIXMAP_FORMATS},
+    pixmap::DEFAULT_PIXMAP_FORMATS,
     screen::{Depth, Screen, Visual},
-    VENDOR,
+    Connection, Endianness, VENDOR,
 };
-
-#[derive(Debug)]
-pub struct Connection {
-    pub endianness: Endianness,
-    pub sequence_number: u16,
-}
-
-#[derive(Clone, Debug)]
-#[repr(u8)]
-pub enum Endianness {
-    Big = b'B',
-    Little = b'l',
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
@@ -74,134 +59,151 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
         b'l' => Endianness::Little,
         _ => panic!("invalid endianness {}", client_prefix_bytes[0]),
     };
+    let connection = Connection {
+        endianness: endianness.clone(),
+        sequence_number: 0,
+    };
+
     let client_prefix = ConnClientPrefix {
         endian: client_prefix_bytes[0],
-        major: card16(
-            &Connection {
-                endianness: endianness.clone(),
-                sequence_number: 0,
-            },
-            &client_prefix_bytes[2..],
-        ),
-        minor: card16(
-            &Connection {
-                endianness: endianness.clone(),
-                sequence_number: 0,
-            },
-            &client_prefix_bytes[4..],
-        ),
-        n_auth_name: card16(
-            &Connection {
-                endianness: endianness.clone(),
-                sequence_number: 0,
-            },
-            &client_prefix_bytes[6..],
-        ),
-        d_auth_data: card16(
-            &Connection {
-                endianness: endianness.clone(),
-                sequence_number: 0,
-            },
-            &client_prefix_bytes[8..],
-        ),
+        major: connection.card16(&client_prefix_bytes[2..]),
+        minor: connection.card16(&client_prefix_bytes[4..]),
+        n_auth_name: connection.card16(&client_prefix_bytes[6..]),
+        d_auth_data: connection.card16(&client_prefix_bytes[8..]),
     };
 
     //let _auth_bytes = stream.read(&mut vec![0u8;(client_prefix.n_auth_name+pad(client_prefix.n_auth_name as usize) as u16+client_prefix.d_auth_data+pad(client_prefix.d_auth_data as usize) as u16) as usize]);
+
+    /* Append Connection Setup */
+    let conn_setup = ConnSetup {
+        release: 1,
+        rid_base: 0x4600000,
+        rid_mask: 0x01fffff,
+        motion_buffer_size: 256,
+        v_bytes_vendor: VENDOR.len() as u16,
+        max_request_size: 65535,
+        num_roots: 1,
+        num_formats: 1,
+        image_byte_order: 0,
+        bitmap_bit_order: 0,
+        bitmap_scanline_unit: 32,
+        bitmap_scanline_pad: 32,
+        min_keycode: 8,
+        max_keycode: 255,
+        pad2: 0,
+    };
+
     let mut additional_data: Vec<u8> = vec![];
+    additional_data.append(&mut connection.to_bytes_32(conn_setup.release).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(conn_setup.rid_base).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(conn_setup.rid_mask).to_vec());
     additional_data.append(
-        &mut unsafe {
-            ::core::slice::from_raw_parts(
-                (&ConnSetup {
-                    release: 1,
-                    rid_base: 0x4600000,
-                    rid_mask: 0x01fffff,
-                    motion_buffer_size: 256,
-                    v_bytes_vendor: VENDOR.len() as u16,
-                    max_request_size: 65535,
-                    num_roots: 1,
-                    num_formats: 1,
-                    image_byte_order: 0,
-                    bitmap_bit_order: 0,
-                    bitmap_scanline_unit: 32,
-                    bitmap_scanline_pad: 32,
-                    min_keycode: 8,
-                    max_keycode: 255,
-                    pad2: 0,
-                } as *const ConnSetup) as *const u8,
-                ::core::mem::size_of::<ConnSetup>(),
-            )
-        }
-        .to_vec(),
+        &mut connection
+            .to_bytes_32(conn_setup.motion_buffer_size)
+            .to_vec(),
     );
+    additional_data.append(&mut connection.to_bytes_16(conn_setup.v_bytes_vendor).to_vec());
+    additional_data.append(&mut connection.to_bytes_16(conn_setup.max_request_size).to_vec());
+    additional_data.append(&mut vec![
+        conn_setup.num_roots,
+        conn_setup.num_formats,
+        conn_setup.image_byte_order,
+        conn_setup.bitmap_bit_order,
+        conn_setup.bitmap_scanline_unit,
+        conn_setup.bitmap_scanline_pad,
+        conn_setup.min_keycode,
+        conn_setup.max_keycode,
+    ]);
+    additional_data.append(&mut connection.to_bytes_32(conn_setup.pad2).to_vec());
     additional_data.append(&mut VENDOR.as_bytes().to_vec());
-    additional_data.append(&mut vec![0u8; pad(VENDOR.len())]);
-    additional_data.append(
-        &mut unsafe {
-            ::core::slice::from_raw_parts(
-                (&DEFAULT_PIXMAP_FORMATS[0] as *const PixmapFormat) as *const u8,
-                ::core::mem::size_of::<PixmapFormat>(),
-            )
-        }
-        .to_vec(),
-    );
-    additional_data.append(
-        &mut unsafe {
-            ::core::slice::from_raw_parts(
-                (&Screen {
-                    root_window: 1,
-                    default_colormap: 1,
-                    white_pixel: 1,
-                    black_pixel: 0,
-                    current_input_masks: 0,
-                    width_px: 1920,
-                    height_px: 1080,
-                    width_mm: 192,
-                    height_mm: 108,
-                    min_installed_maps: 1,
-                    max_installed_maps: 1,
-                    root_visual: 1,
-                    backing_stores: 0,
-                    save_unders: 0,
-                    root_depth: 1,
-                    num_depths: 1,
-                } as *const Screen) as *const u8,
-                ::core::mem::size_of::<Screen>(),
-            )
-        }
-        .to_vec(),
-    );
-    additional_data.append(
-        &mut unsafe {
-            ::core::slice::from_raw_parts(
-                (&Depth {
-                    depth: 1,
-                    pad0: 0,
-                    number_of_visuals: 1,
-                    pad1: 0,
-                } as *const Depth) as *const u8,
-                ::core::mem::size_of::<Depth>(),
-            )
-        }
-        .to_vec(),
-    );
-    additional_data.append(
-        &mut unsafe {
-            ::core::slice::from_raw_parts(
-                (&Visual {
-                    visual_id: 1,
-                    class: 4,
-                    bits_per_rgb_val: 32,
-                    colormap_entries: 256,
-                    red_mask: 0xFF,
-                    green_mask: 0xFF00,
-                    blue_mask: 0xFF0000,
-                    pad0: 0,
-                } as *const Visual) as *const u8,
-                ::core::mem::size_of::<Visual>(),
-            )
-        }
-        .to_vec(),
-    );
+    additional_data.append(&mut vec![0u8; Connection::pad(VENDOR.len())]);
+
+    /* Append Pixmap Formats */
+    for default_pixmap_format in DEFAULT_PIXMAP_FORMATS {
+        additional_data.append(&mut vec![
+            default_pixmap_format.depth,
+            default_pixmap_format.bpp,
+            default_pixmap_format.scanline_pad,
+            default_pixmap_format.pad0,
+        ]);
+        additional_data.append(&mut connection.to_bytes_32(default_pixmap_format.pad1).to_vec());
+    }
+
+    /* Define some defaults */
+
+    let screen = Screen {
+        root_window: 1,
+        default_colormap: 1,
+        white_pixel: 1,
+        black_pixel: 0,
+        current_input_masks: 0,
+        width_px: 1920,
+        height_px: 1080,
+        width_mm: 192,
+        height_mm: 108,
+        min_installed_maps: 1,
+        max_installed_maps: 1,
+        root_visual: 1,
+        backing_stores: 0,
+        save_unders: 0,
+        root_depth: 1,
+        num_depths: 1,
+    };
+    let depth = Depth {
+        depth: 1,
+        pad0: 0,
+        number_of_visuals: 1,
+        pad1: 0,
+    };
+    let visual = Visual {
+        visual_id: 1,
+        class: 4,
+        bits_per_rgb_val: 32,
+        colormap_entries: 256,
+        red_mask: 0xFF,
+        green_mask: 0xFF00,
+        blue_mask: 0xFF0000,
+        pad0: 0,
+    };
+
+    /* Append Screens */
+
+    additional_data.append(&mut connection.to_bytes_32(screen.root_window).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(screen.default_colormap).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(screen.white_pixel).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(screen.black_pixel).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(screen.current_input_masks).to_vec());
+    additional_data.append(&mut connection.to_bytes_16(screen.width_px).to_vec());
+    additional_data.append(&mut connection.to_bytes_16(screen.height_px).to_vec());
+    additional_data.append(&mut connection.to_bytes_16(screen.width_mm).to_vec());
+    additional_data.append(&mut connection.to_bytes_16(screen.height_mm).to_vec());
+    additional_data.append(&mut connection.to_bytes_16(screen.min_installed_maps).to_vec());
+    additional_data.append(&mut connection.to_bytes_16(screen.max_installed_maps).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(screen.root_visual).to_vec());
+    additional_data.append(&mut vec![
+        screen.backing_stores,
+        screen.save_unders,
+        screen.root_depth,
+        screen.num_depths,
+    ]);
+
+    /* Append Depths */
+
+    additional_data.append(&mut vec![depth.depth, depth.pad0]);
+    additional_data.append(&mut connection.to_bytes_16(depth.number_of_visuals).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(depth.pad1).to_vec());
+
+    /* Append Visuals */
+
+    additional_data.append(&mut connection.to_bytes_32(visual.visual_id).to_vec());
+    additional_data.append(&mut vec![visual.class, visual.bits_per_rgb_val]);
+    additional_data.append(&mut connection.to_bytes_16(visual.colormap_entries).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(visual.red_mask).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(visual.green_mask).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(visual.blue_mask).to_vec());
+    additional_data.append(&mut connection.to_bytes_32(visual.pad0).to_vec());
+
+    /* Write Connection Setup Data */
     let conn_setup_prefix = ConnSetupPrefix {
         success: 1,
         length_reason: 0,
@@ -209,22 +211,18 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
         minor: client_prefix.minor,
         additional_length: additional_data.len() as u16 / 4,
     };
-    stream
-        .write(&[
-            conn_setup_prefix.success,
-            conn_setup_prefix.length_reason,
-            conn_setup_prefix.major.to_le_bytes()[0],
-            conn_setup_prefix.major.to_le_bytes()[1],
-            conn_setup_prefix.minor.to_le_bytes()[0],
-            conn_setup_prefix.minor.to_le_bytes()[1],
-            conn_setup_prefix.additional_length.to_le_bytes()[0],
-            conn_setup_prefix.additional_length.to_le_bytes()[1],
-        ])
-        .ok();
 
+    let mut prefix_data = vec![conn_setup_prefix.success, conn_setup_prefix.length_reason];
+    prefix_data.append(&mut connection.to_bytes_16(conn_setup_prefix.major).to_vec());
+    prefix_data.append(&mut connection.to_bytes_16(conn_setup_prefix.major).to_vec());
+    prefix_data.append(
+        &mut connection
+            .to_bytes_16(conn_setup_prefix.additional_length)
+            .to_vec(),
+    );
+
+    stream.write(&prefix_data).ok();
     stream.write(&additional_data).ok()?;
-    Some(Connection {
-        endianness,
-        sequence_number: 0,
-    })
+
+    Some(connection)
 }

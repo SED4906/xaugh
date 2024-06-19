@@ -1,11 +1,6 @@
-use std::{
-    io::Read,
-    net::TcpStream,
-};
+use std::{io::Read, net::TcpStream};
 
-use crate::{card16, card32, copy8to32, int16};
-
-use crate::connection::Connection;
+use crate::Connection;
 
 #[repr(C)]
 #[derive(Clone, Debug)]
@@ -278,319 +273,322 @@ pub struct RequestPrefix {
     request_length: u16,
 }
 
-pub fn read_request(connection: &Connection, mut stream: &TcpStream) -> Option<Request> {
-    let mut request_prefix_bytes = [0u8; 4];
-    stream.read(&mut request_prefix_bytes).unwrap();
-    let request_prefix = RequestPrefix {
-        opcode: request_prefix_bytes[0],
-        extra: request_prefix_bytes[1],
-        request_length: card16(connection, &request_prefix_bytes[2..]),
-    };
-    let mut request_bytes = vec![0; (request_prefix.request_length as usize).saturating_sub(1) * 4];
-    stream.read(&mut request_bytes).unwrap();
-    Some(match request_prefix.opcode {
-        0 => {
-            return None;
-        }
-        1 => {
-            let window = card32(connection, &request_bytes);
-            let parent = card32(connection, &request_bytes[4..]);
-            let x = card16(connection, &request_bytes[8..]);
-            let y = card16(connection, &request_bytes[10..]);
-            let width = card16(connection, &request_bytes[12..]);
-            let height = card16(connection, &request_bytes[14..]);
-            let border_width = card16(connection, &request_bytes[16..]);
-            let class = card16(connection, &request_bytes[18..]);
-            let visual = card32(connection, &request_bytes[20..]);
-            let value_mask = card32(connection, &request_bytes[24..]);
-            let value_list = &copy8to32(connection, &request_bytes[28..]);
-            let mut values = WindowAttributes::default();
-            for (index, value) in value_list.into_iter().enumerate() {
-                let mut times = 0;
-                let mut w = 0;
-                let which = loop {
-                    if w >= 32 {
-                        panic!("bit mask error");
+impl Connection {
+    pub fn read_request(&self, mut stream: &TcpStream) -> Option<Request> {
+        let mut request_prefix_bytes = [0u8; 4];
+        stream.read(&mut request_prefix_bytes).unwrap();
+        let request_prefix = RequestPrefix {
+            opcode: request_prefix_bytes[0],
+            extra: request_prefix_bytes[1],
+            request_length: self.card16(&request_prefix_bytes[2..]),
+        };
+        let mut request_bytes =
+            vec![0; (request_prefix.request_length as usize).saturating_sub(1) * 4];
+        stream.read(&mut request_bytes).unwrap();
+        Some(match request_prefix.opcode {
+            0 => {
+                return None;
+            }
+            1 => {
+                let window = self.card32(&request_bytes);
+                let parent = self.card32(&request_bytes[4..]);
+                let x = self.card16(&request_bytes[8..]);
+                let y = self.card16(&request_bytes[10..]);
+                let width = self.card16(&request_bytes[12..]);
+                let height = self.card16(&request_bytes[14..]);
+                let border_width = self.card16(&request_bytes[16..]);
+                let class = self.card16(&request_bytes[18..]);
+                let visual = self.card32(&request_bytes[20..]);
+                let value_mask = self.card32(&request_bytes[24..]);
+                let value_list = &self.copy8to32(&request_bytes[28..]);
+                let mut values = WindowAttributes::default();
+                for (index, value) in value_list.into_iter().enumerate() {
+                    let mut times = 0;
+                    let mut w = 0;
+                    let which = loop {
+                        if w >= 32 {
+                            panic!("bit mask error");
+                        }
+                        if value_mask & (1 << w) == 0 {
+                            w += 1;
+                        } else if times < index {
+                            times += 1;
+                            w += 1;
+                        } else {
+                            break w;
+                        }
+                    };
+                    match which {
+                        0 => values.background_pixmap = *value,
+                        1 => values.background_pixel = *value,
+                        2 => values.border_pixmap = *value,
+                        3 => values.border_pixel = *value,
+                        4 => values.border_gravity = *value,
+                        5 => values.win_gravity = *value,
+                        6 => values.backing_store = *value,
+                        7 => values.backing_planes = *value,
+                        8 => values.backing_pixel = *value,
+                        9 => values.override_redirect = *value,
+                        10 => values.save_under = *value,
+                        11 => values.event_mask = *value,
+                        12 => values.do_not_propogate_mask = *value,
+                        13 => values.colormap = *value,
+                        14 => values.cursor = *value,
+                        _ => panic!("invalid bit in window attribute mask"),
                     }
-                    if value_mask & (1 << w) == 0 {
-                        w += 1;
-                    } else if times < index {
-                        times += 1;
-                        w += 1;
-                    } else {
-                        break w;
-                    }
-                };
-                match which {
-                    0 => values.background_pixmap = *value,
-                    1 => values.background_pixel = *value,
-                    2 => values.border_pixmap = *value,
-                    3 => values.border_pixel = *value,
-                    4 => values.border_gravity = *value,
-                    5 => values.win_gravity = *value,
-                    6 => values.backing_store = *value,
-                    7 => values.backing_planes = *value,
-                    8 => values.backing_pixel = *value,
-                    9 => values.override_redirect = *value,
-                    10 => values.save_under = *value,
-                    11 => values.event_mask = *value,
-                    12 => values.do_not_propogate_mask = *value,
-                    13 => values.colormap = *value,
-                    14 => values.cursor = *value,
-                    _ => panic!("invalid bit in window attribute mask"),
+                }
+                Request::CreateWindow {
+                    window,
+                    parent,
+                    x,
+                    y,
+                    width,
+                    height,
+                    border_width,
+                    class,
+                    visual,
+                    values,
                 }
             }
-            Request::CreateWindow {
-                window,
-                parent,
-                x,
-                y,
-                width,
-                height,
-                border_width,
-                class,
-                visual,
-                values,
-            }
-        }
-        2 => {
-            let window = card32(connection, &request_bytes);
-            let value_mask = card32(connection, &request_bytes[4..]);
-            let value_list = &copy8to32(connection, &request_bytes[8..]);
-            let mut values = WindowAttributes::default();
-            for (index, value) in value_list.into_iter().enumerate() {
-                let mut times = 0;
-                let mut w = 0;
-                let which = loop {
-                    if w >= 32 {
-                        panic!("bit mask error");
+            2 => {
+                let window = self.card32(&request_bytes);
+                let value_mask = self.card32(&request_bytes[4..]);
+                let value_list = &self.copy8to32(&request_bytes[8..]);
+                let mut values = WindowAttributes::default();
+                for (index, value) in value_list.into_iter().enumerate() {
+                    let mut times = 0;
+                    let mut w = 0;
+                    let which = loop {
+                        if w >= 32 {
+                            panic!("bit mask error");
+                        }
+                        if value_mask & (1 << w) == 0 {
+                            w += 1;
+                        } else if times < index {
+                            times += 1;
+                            w += 1;
+                        } else {
+                            break w;
+                        }
+                    };
+                    match which {
+                        0 => values.background_pixmap = *value,
+                        1 => values.background_pixel = *value,
+                        2 => values.border_pixmap = *value,
+                        3 => values.border_pixel = *value,
+                        4 => values.border_gravity = *value,
+                        5 => values.win_gravity = *value,
+                        6 => values.backing_store = *value,
+                        7 => values.backing_planes = *value,
+                        8 => values.backing_pixel = *value,
+                        9 => values.override_redirect = *value,
+                        10 => values.save_under = *value,
+                        11 => values.event_mask = *value,
+                        12 => values.do_not_propogate_mask = *value,
+                        13 => values.colormap = *value,
+                        14 => values.cursor = *value,
+                        _ => panic!("invalid bit in window attribute mask"),
                     }
-                    if value_mask & (1 << w) == 0 {
-                        w += 1;
-                    } else if times < index {
-                        times += 1;
-                        w += 1;
-                    } else {
-                        break w;
-                    }
-                };
-                match which {
-                    0 => values.background_pixmap = *value,
-                    1 => values.background_pixel = *value,
-                    2 => values.border_pixmap = *value,
-                    3 => values.border_pixel = *value,
-                    4 => values.border_gravity = *value,
-                    5 => values.win_gravity = *value,
-                    6 => values.backing_store = *value,
-                    7 => values.backing_planes = *value,
-                    8 => values.backing_pixel = *value,
-                    9 => values.override_redirect = *value,
-                    10 => values.save_under = *value,
-                    11 => values.event_mask = *value,
-                    12 => values.do_not_propogate_mask = *value,
-                    13 => values.colormap = *value,
-                    14 => values.cursor = *value,
-                    _ => panic!("invalid bit in window attribute mask"),
                 }
+                Request::ChangeWindowAttributes { window, values }
             }
-            Request::ChangeWindowAttributes { window, values }
-        }
-        3 => {
-            let window = card32(connection, &request_bytes);
-            Request::GetWindowAttributes { window }
-        }
-        4 => {
-            let window = card32(connection, &request_bytes);
-            Request::DestroyWindow { window }
-        }
-        5 => Request::DestroySubwindows {
-            window: card32(connection, &request_bytes),
-        },
-        6 => Request::ChangeSaveSet {
-            mode: request_prefix.extra,
-            window: card32(connection, &request_bytes),
-        },
-        7 => Request::ReparentWindow {
-            window: card32(connection, &request_bytes),
-            parent: card32(connection, &request_bytes[4..]),
-            x: card16(connection, &request_bytes[6..]),
-            y: card16(connection, &request_bytes[8..]),
-        },
-        8 => Request::MapWindow {
-            window: card32(connection, &request_bytes),
-        },
-        9 => Request::MapSubwindows {
-            window: card32(connection, &request_bytes),
-        },
-        10 => Request::UnmapWindow {
-            window: card32(connection, &request_bytes),
-        },
-        11 => Request::UnmapSubwindows {
-            window: card32(connection, &request_bytes),
-        },
-        12 => {
-            let window = card32(connection, &request_bytes);
-            let value_mask = card16(connection, &request_bytes[4..]);
-            let value_list = &copy8to32(connection, &request_bytes[8..]);
-            let mut values = ConfigureValues::default();
-            for (index, value) in value_list.into_iter().enumerate() {
-                let mut times = 0;
-                let mut w = 0;
-                let which = loop {
-                    if w >= 16 {
-                        panic!("bit mask error");
-                    }
-                    if value_mask & (1 << w) == 0 {
-                        w += 1;
-                    } else if times < index {
-                        times += 1;
-                        w += 1;
-                    } else {
-                        break w;
-                    }
-                };
-                match which {
-                    0 => values.x = *value,
-                    1 => values.y = *value,
-                    2 => values.width = *value,
-                    3 => values.height = *value,
-                    4 => values.border_width = *value,
-                    5 => values.sibling = *value,
-                    6 => values.stack_mode = *value,
-                    _ => panic!("invalid bit in window attribute mask"),
-                }
+            3 => {
+                let window = self.card32(&request_bytes);
+                Request::GetWindowAttributes { window }
             }
-            Request::ConfigureWindow { window, values }
-        }
-        13 => Request::CirculateWindow {
-            direction: request_prefix.extra,
-            window: card32(connection, &request_bytes),
-        },
-        14 => Request::GetGeometry {
-            drawable: card32(connection, &request_bytes),
-        },
-        15 => Request::QueryTree {
-            window: card32(connection, &request_bytes),
-        },
-        16 => Request::InternAtom {
-            only_if_exists: request_prefix.extra,
-            name: String::from_utf8_lossy(
-                &request_bytes[4..card16(connection, &request_bytes) as usize + 4],
-            )
-            .to_string(),
-        },
-        17 => Request::GetAtomName {
-            atom: card32(connection, &request_bytes),
-        },
-        18 => {
-            let mut data = request_bytes[20..].to_vec();
-            data.truncate(
-                (request_bytes[12] as usize) * card32(connection, &request_bytes[16..]) as usize,
-            );
-            Request::ChangeProperty {
+            4 => {
+                let window = self.card32(&request_bytes);
+                Request::DestroyWindow { window }
+            }
+            5 => Request::DestroySubwindows {
+                window: self.card32(&request_bytes),
+            },
+            6 => Request::ChangeSaveSet {
                 mode: request_prefix.extra,
-                window: card32(connection, &request_bytes),
-                property: card32(connection, &request_bytes[4..]),
-                ptype: card32(connection, &request_bytes[8..]),
-                format: request_bytes[12],
-                data,
-            }
-        }
-        19 => Request::DeleteProperty {
-            window: card32(connection, &request_bytes),
-            property: card32(connection, &request_bytes[4..]),
-        },
-        20 => Request::GetProperty {
-            delete: request_prefix.extra,
-            window: card32(connection, &request_bytes),
-            property: card32(connection, &request_bytes[4..]),
-            typ: card32(connection, &request_bytes[8..]),
-            long_offset: card32(connection, &request_bytes[12..]),
-            long_length: card32(connection, &request_bytes[16..]),
-        },
-        23 => Request::GetSelectionOwner {
-            selection: card32(connection, &request_bytes),
-        },
-        36 => Request::GrabServer,
-        43 => Request::GetInputFocus,
-        45 => Request::OpenFont {
-            fid: card32(connection, &request_bytes),
-            name: String::from_utf8_lossy(
-                &request_bytes[8..card16(connection, &request_bytes[4..]) as usize + 8],
-            )
-            .to_string(),
-        },
-        47 => Request::QueryFont {
-            fid: card32(connection, &request_bytes),
-        },
-        49 => Request::ListFonts {
-            max_names: card16(connection, &request_bytes),
-            pattern: String::from_utf8_lossy(
-                &request_bytes[4..card16(connection, &request_bytes[2..]) as usize + 4],
-            )
-            .to_string(),
-        },
-        53 => Request::CreatePixmap {
-            depth: request_prefix.extra,
-            pid: card32(connection, &request_bytes),
-            drawable: card32(connection, &request_bytes[4..]),
-            width: card16(connection, &request_bytes[8..]),
-            height: card16(connection, &request_bytes[10..]),
-        },
-        54 => Request::FreePixmap {
-            pixmap: card32(connection, &request_bytes),
-        },
-        55 => {
-            let cid = card32(connection, &request_bytes);
-            let drawable = card32(connection, &request_bytes[4..]);
-            let value_mask = card32(connection, &request_bytes[8..]);
-            let mut value_list = [0u32; 23];
-            let values = &copy8to32(connection, &request_bytes[12..]);
-            for (index, value) in values.into_iter().enumerate() {
-                let mut times = 0;
-                let mut w = 0;
-                let which = loop {
-                    if value_mask & (1 << w) == 0 {
-                        w += 1;
-                    } else if times < index {
-                        times += 1;
-                        w += 1;
-                    } else {
-                        break w;
+                window: self.card32(&request_bytes),
+            },
+            7 => Request::ReparentWindow {
+                window: self.card32(&request_bytes),
+                parent: self.card32(&request_bytes[4..]),
+                x: self.card16(&request_bytes[6..]),
+                y: self.card16(&request_bytes[8..]),
+            },
+            8 => Request::MapWindow {
+                window: self.card32(&request_bytes),
+            },
+            9 => Request::MapSubwindows {
+                window: self.card32(&request_bytes),
+            },
+            10 => Request::UnmapWindow {
+                window: self.card32(&request_bytes),
+            },
+            11 => Request::UnmapSubwindows {
+                window: self.card32(&request_bytes),
+            },
+            12 => {
+                let window = self.card32(&request_bytes);
+                let value_mask = self.card16(&request_bytes[4..]);
+                let value_list = &self.copy8to32(&request_bytes[8..]);
+                let mut values = ConfigureValues::default();
+                for (index, value) in value_list.into_iter().enumerate() {
+                    let mut times = 0;
+                    let mut w = 0;
+                    let which = loop {
+                        if w >= 16 {
+                            panic!("bit mask error");
+                        }
+                        if value_mask & (1 << w) == 0 {
+                            w += 1;
+                        } else if times < index {
+                            times += 1;
+                            w += 1;
+                        } else {
+                            break w;
+                        }
+                    };
+                    match which {
+                        0 => values.x = *value,
+                        1 => values.y = *value,
+                        2 => values.width = *value,
+                        3 => values.height = *value,
+                        4 => values.border_width = *value,
+                        5 => values.sibling = *value,
+                        6 => values.stack_mode = *value,
+                        _ => panic!("invalid bit in window attribute mask"),
                     }
-                };
-                value_list[which] = *value;
+                }
+                Request::ConfigureWindow { window, values }
             }
-            Request::CreateGC {
-                cid,
-                drawable,
-                value_mask,
-                value_list,
+            13 => Request::CirculateWindow {
+                direction: request_prefix.extra,
+                window: self.card32(&request_bytes),
+            },
+            14 => Request::GetGeometry {
+                drawable: self.card32(&request_bytes),
+            },
+            15 => Request::QueryTree {
+                window: self.card32(&request_bytes),
+            },
+            16 => Request::InternAtom {
+                only_if_exists: request_prefix.extra,
+                name: String::from_utf8_lossy(
+                    &request_bytes[4..self.card16(&request_bytes) as usize + 4],
+                )
+                .to_string(),
+            },
+            17 => Request::GetAtomName {
+                atom: self.card32(&request_bytes),
+            },
+            18 => {
+                let mut data = request_bytes[20..].to_vec();
+                data.truncate(
+                    (request_bytes[12] as usize) * self.card32(&request_bytes[16..]) as usize,
+                );
+                Request::ChangeProperty {
+                    mode: request_prefix.extra,
+                    window: self.card32(&request_bytes),
+                    property: self.card32(&request_bytes[4..]),
+                    ptype: self.card32(&request_bytes[8..]),
+                    format: request_bytes[12],
+                    data,
+                }
             }
-        }
-        60 => Request::FreeGC {
-            gc: card32(connection, &request_bytes),
-        },
-        72 => Request::PutImage {
-            format: request_prefix.extra,
-            drawable: card32(connection, &request_bytes),
-            gc: card32(connection, &request_bytes[4..]),
-            width: card16(connection, &request_bytes[8..]),
-            height: card16(connection, &request_bytes[10..]),
-            dstx: int16(connection, &request_bytes[12..]),
-            dsty: int16(connection, &request_bytes[14..]),
-            leftpad: request_bytes[16],
-            depth: request_bytes[17],
-            data: request_bytes[20..].to_vec(),
-        },
-        98 => Request::QueryExtension {
-            name: String::from_utf8_lossy(
-                &request_bytes[4..card16(connection, &request_bytes) as usize + 4],
-            )
-            .to_string(),
-        },
-        103 => Request::GetKeyboardControl,
-        127 => Request::NoOperation,
-        _ => todo!("{}", request_prefix.opcode),
-    })
+            19 => Request::DeleteProperty {
+                window: self.card32(&request_bytes),
+                property: self.card32(&request_bytes[4..]),
+            },
+            20 => Request::GetProperty {
+                delete: request_prefix.extra,
+                window: self.card32(&request_bytes),
+                property: self.card32(&request_bytes[4..]),
+                typ: self.card32(&request_bytes[8..]),
+                long_offset: self.card32(&request_bytes[12..]),
+                long_length: self.card32(&request_bytes[16..]),
+            },
+            23 => Request::GetSelectionOwner {
+                selection: self.card32(&request_bytes),
+            },
+            36 => Request::GrabServer,
+            43 => Request::GetInputFocus,
+            45 => Request::OpenFont {
+                fid: self.card32(&request_bytes),
+                name: String::from_utf8_lossy(
+                    &request_bytes[8..self.card16(&request_bytes[4..]) as usize + 8],
+                )
+                .to_string(),
+            },
+            47 => Request::QueryFont {
+                fid: self.card32(&request_bytes),
+            },
+            49 => Request::ListFonts {
+                max_names: self.card16(&request_bytes),
+                pattern: String::from_utf8_lossy(
+                    &request_bytes[4..self.card16(&request_bytes[2..]) as usize + 4],
+                )
+                .to_string(),
+            },
+            53 => Request::CreatePixmap {
+                depth: request_prefix.extra,
+                pid: self.card32(&request_bytes),
+                drawable: self.card32(&request_bytes[4..]),
+                width: self.card16(&request_bytes[8..]),
+                height: self.card16(&request_bytes[10..]),
+            },
+            54 => Request::FreePixmap {
+                pixmap: self.card32(&request_bytes),
+            },
+            55 => {
+                let cid = self.card32(&request_bytes);
+                let drawable = self.card32(&request_bytes[4..]);
+                let value_mask = self.card32(&request_bytes[8..]);
+                let mut value_list = [0u32; 23];
+                let values = &self.copy8to32(&request_bytes[12..]);
+                for (index, value) in values.into_iter().enumerate() {
+                    let mut times = 0;
+                    let mut w = 0;
+                    let which = loop {
+                        if value_mask & (1 << w) == 0 {
+                            w += 1;
+                        } else if times < index {
+                            times += 1;
+                            w += 1;
+                        } else {
+                            break w;
+                        }
+                    };
+                    value_list[which] = *value;
+                }
+                Request::CreateGC {
+                    cid,
+                    drawable,
+                    value_mask,
+                    value_list,
+                }
+            }
+            60 => Request::FreeGC {
+                gc: self.card32(&request_bytes),
+            },
+            72 => Request::PutImage {
+                format: request_prefix.extra,
+                drawable: self.card32(&request_bytes),
+                gc: self.card32(&request_bytes[4..]),
+                width: self.card16(&request_bytes[8..]),
+                height: self.card16(&request_bytes[10..]),
+                dstx: self.int16(&request_bytes[12..]),
+                dsty: self.int16(&request_bytes[14..]),
+                leftpad: request_bytes[16],
+                depth: request_bytes[17],
+                data: request_bytes[20..].to_vec(),
+            },
+            98 => Request::QueryExtension {
+                name: String::from_utf8_lossy(
+                    &request_bytes[4..self.card16(&request_bytes) as usize + 4],
+                )
+                .to_string(),
+            },
+            103 => Request::GetKeyboardControl,
+            127 => Request::NoOperation,
+            _ => todo!("{}", request_prefix.opcode),
+        })
+    }
 }

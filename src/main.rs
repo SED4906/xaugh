@@ -3,7 +3,7 @@ use std::{
     thread,
 };
 
-use xaugh::{connection::establish_connection, request::read_request, response::write_response};
+use xaugh::connection::establish_connection;
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:6001").unwrap();
@@ -21,8 +21,8 @@ fn main() {
 fn handle_connection(stream: TcpStream) -> Option<()> {
     let mut connection = establish_connection(&stream)?;
     loop {
-        let request = read_request(&connection, &stream)?;
+        let request = connection.read_request(&stream)?;
         println!("{request:#?}");
-        write_response(&mut connection, &stream, request);
+        connection.write_response(&stream, request);
     }
 }
