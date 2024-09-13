@@ -1,9 +1,9 @@
-use std::{io::Write, net::TcpStream};
+use std::io::{Read,Write};
 
-use crate::{request::Request, Connection};
+use crate::{request::Request, connection::Connection};
 
-impl Connection {
-    pub fn empty_response(&mut self, mut stream: &TcpStream, extra_length: u32) {
+impl<T: Read + Write> Connection<T> {
+    pub fn empty_response(&mut self, extra_length: u32) {
         println!("(not really implemented)");
         let mut bytes_to_write = vec![
             1,
@@ -40,16 +40,16 @@ impl Connection {
             0,
         ];
         bytes_to_write.append(&mut vec![0; 4 * extra_length as usize]);
-        stream.write(&bytes_to_write).unwrap();
+        self.stream.write(&bytes_to_write).unwrap();
     }
 
-    pub fn write_response(&mut self, stream: &TcpStream, request: Request) {
+    pub fn write_response(&mut self, request: Request) {
         self.sequence_number += 1;
         match request {
             Request::CreateWindow { .. } => {}
             Request::ChangeWindowAttributes { .. } => {}
             Request::GetWindowAttributes { .. } => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::DestroyWindow { .. } => {}
             Request::DestroySubwindows { .. } => {}
@@ -62,35 +62,35 @@ impl Connection {
             Request::ConfigureWindow { .. } => {}
             Request::CirculateWindow { .. } => {}
             Request::GetGeometry { .. } => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::QueryTree { .. } => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::InternAtom { .. } => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::GetAtomName { .. } => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::ChangeProperty { .. } => {}
             Request::DeleteProperty { .. } => {}
             Request::GetProperty { .. } => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::GetSelectionOwner { .. } => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::GrabServer => {}
             Request::GetInputFocus => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::OpenFont { .. } => {}
             Request::QueryFont { .. } => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::ListFonts { .. } => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::CreatePixmap { .. } => {}
             Request::FreePixmap { .. } => {}
@@ -98,10 +98,10 @@ impl Connection {
             Request::FreeGC { .. } => {}
             Request::PutImage { .. } => {}
             Request::QueryExtension { .. } => {
-                self.empty_response(stream, 0);
+                self.empty_response(0);
             }
             Request::GetKeyboardControl => {
-                self.empty_response(stream, 5);
+                self.empty_response(5);
             }
             Request::NoOperation => {}
             _ => todo!("response"),

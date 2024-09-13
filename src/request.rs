@@ -1,6 +1,6 @@
-use std::{io::Read, net::TcpStream};
+use std::io::{Read,Write};
 
-use crate::Connection;
+use crate::connection::Connection;
 
 #[repr(C)]
 #[derive(Clone, Debug)]
@@ -93,9 +93,19 @@ pub enum Request {
         long_offset: u32,
         long_length: u32,
     },
-    RotateProperties,
-    ListProperties,
-    SetSelectionOwner,
+    RotateProperties {
+        window: u32,
+        delta: i16,
+        properties: Vec<u32>,
+    },
+    ListProperties {
+        window: u32
+    },
+    SetSelectionOwner {
+        owner: u32,
+        selection: u32,
+        time: u32,
+    },
     GetSelectionOwner {
         selection: u32,
     },
@@ -273,10 +283,10 @@ pub struct RequestPrefix {
     request_length: u16,
 }
 
-impl Connection {
-    pub fn read_request(&self, mut stream: &TcpStream) -> Option<Request> {
+impl<T: Read + Write> Connection<T> {
+    pub fn read_request(&mut self) -> Option<Request> {
         let mut request_prefix_bytes = [0u8; 4];
-        stream.read(&mut request_prefix_bytes).unwrap();
+        self.stream.read(&mut request_prefix_bytes).unwrap();
         let request_prefix = RequestPrefix {
             opcode: request_prefix_bytes[0],
             extra: request_prefix_bytes[1],
@@ -284,7 +294,7 @@ impl Connection {
         };
         let mut request_bytes =
             vec![0; (request_prefix.request_length as usize).saturating_sub(1) * 4];
-        stream.read(&mut request_bytes).unwrap();
+        self.stream.read(&mut request_bytes).unwrap();
         Some(match request_prefix.opcode {
             0 => {
                 return None;
@@ -505,6 +515,14 @@ impl Connection {
                 long_offset: self.card32(&request_bytes[12..]),
                 long_length: self.card32(&request_bytes[16..]),
             },
+            21 => Request::ListProperties {
+                window: self.card32(&request_bytes)
+            },
+            22 => Request::SetSelectionOwner {
+                owner: self.card32(&request_bytes),
+                selection: self.card32(&request_bytes[4..]),
+                time: self.card32(&request_bytes[8..]),
+            },
             23 => Request::GetSelectionOwner {
                 selection: self.card32(&request_bytes),
             },
@@ -587,6 +605,11 @@ impl Connection {
                 .to_string(),
             },
             103 => Request::GetKeyboardControl,
+            114 => Request::RotateProperties {
+                window: self.card32(&request_bytes),
+                delta: self.int16(&request_bytes[6..]),
+                properties: self.copy8to32(&request_bytes[8..]),
+            },
             127 => Request::NoOperation,
             _ => todo!("{}", request_prefix.opcode),
         })

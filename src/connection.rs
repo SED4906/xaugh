@@ -1,13 +1,81 @@
-use std::{
-    io::{Read, Write},
-    net::TcpStream,
-};
+use std::io::{Read, Write};
 
 use crate::{
     pixmap::DEFAULT_PIXMAP_FORMATS,
     screen::{Depth, Screen, Visual},
-    Connection, Endianness, VENDOR,
+    VENDOR,
 };
+
+
+#[derive(Debug)]
+pub struct Connection<T: Read + Write> {
+    pub stream: T,
+    pub endianness: Endianness,
+    pub sequence_number: u16,
+}
+
+#[derive(Clone, Debug)]
+#[repr(u8)]
+pub enum Endianness {
+    Big = b'B',
+    Little = b'l',
+}
+
+pub fn pad(s: usize) -> usize {
+    (4 - (s % 4)) % 4
+}
+
+impl Endianness {
+    pub fn card32(&self, bytes: &[u8]) -> u32 {
+        match self {
+            Endianness::Little => {
+                (bytes[0] as u32)
+                    | ((bytes[1] as u32) << 8)
+                    | ((bytes[2] as u32) << 16)
+                    | ((bytes[3] as u32) << 24)
+            }
+            Endianness::Big => {
+                (bytes[3] as u32)
+                    | ((bytes[2] as u32) << 8)
+                    | ((bytes[1] as u32) << 16)
+                    | ((bytes[0] as u32) << 24)
+            }
+        }
+    }
+
+    pub fn card16(&self, bytes: &[u8]) -> u16 {
+        match self {
+            Endianness::Little => (bytes[0] as u16) | ((bytes[1] as u16) << 8),
+            Endianness::Big => (bytes[1] as u16) | ((bytes[0] as u16) << 8),
+        }
+    }
+
+    pub fn int16(&self, bytes: &[u8]) -> i16 {
+        self.card16(bytes) as i16
+    }
+
+    pub fn copy8to32(&self, source: &[u8]) -> Vec<u32> {
+        let mut target = vec![];
+        for chunk in source.chunks(4) {
+            target.push(self.card32(chunk));
+        }
+        target
+    }
+
+    pub fn to_bytes_32(&self, val: u32) -> [u8; 4] {
+        match self {
+            Endianness::Little => val.to_le_bytes(),
+            Endianness::Big => val.to_be_bytes(),
+        }
+    }
+
+    pub fn to_bytes_16(&self, val: u16) -> [u8; 2] {
+        match self {
+            Endianness::Little => val.to_le_bytes(),
+            Endianness::Big => val.to_be_bytes(),
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
@@ -51,7 +119,7 @@ pub struct ConnSetup {
     pub pad2: u32,
 }
 
-pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
+pub fn establish_connection<T: Read + Write>(mut stream: T) -> Option<Connection<T>> {
     let mut client_prefix_bytes = [0u8; 12];
     stream.read(&mut client_prefix_bytes).ok()?;
     let endianness = match client_prefix_bytes[0] {
@@ -59,17 +127,13 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
         b'l' => Endianness::Little,
         _ => panic!("invalid endianness {}", client_prefix_bytes[0]),
     };
-    let connection = Connection {
-        endianness: endianness.clone(),
-        sequence_number: 0,
-    };
 
     let client_prefix = ConnClientPrefix {
         endian: client_prefix_bytes[0],
-        major: connection.card16(&client_prefix_bytes[2..]),
-        minor: connection.card16(&client_prefix_bytes[4..]),
-        n_auth_name: connection.card16(&client_prefix_bytes[6..]),
-        d_auth_data: connection.card16(&client_prefix_bytes[8..]),
+        major: endianness.card16(&client_prefix_bytes[2..]),
+        minor: endianness.card16(&client_prefix_bytes[4..]),
+        n_auth_name: endianness.card16(&client_prefix_bytes[6..]),
+        d_auth_data: endianness.card16(&client_prefix_bytes[8..]),
     };
 
     //let _auth_bytes = stream.read(&mut vec![0u8;(client_prefix.n_auth_name+pad(client_prefix.n_auth_name as usize) as u16+client_prefix.d_auth_data+pad(client_prefix.d_auth_data as usize) as u16) as usize]);
@@ -94,16 +158,16 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
     };
 
     let mut additional_data: Vec<u8> = vec![];
-    additional_data.append(&mut connection.to_bytes_32(conn_setup.release).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(conn_setup.rid_base).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(conn_setup.rid_mask).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(conn_setup.release).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(conn_setup.rid_base).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(conn_setup.rid_mask).to_vec());
     additional_data.append(
-        &mut connection
+        &mut endianness
             .to_bytes_32(conn_setup.motion_buffer_size)
             .to_vec(),
     );
-    additional_data.append(&mut connection.to_bytes_16(conn_setup.v_bytes_vendor).to_vec());
-    additional_data.append(&mut connection.to_bytes_16(conn_setup.max_request_size).to_vec());
+    additional_data.append(&mut endianness.to_bytes_16(conn_setup.v_bytes_vendor).to_vec());
+    additional_data.append(&mut endianness.to_bytes_16(conn_setup.max_request_size).to_vec());
     additional_data.append(&mut vec![
         conn_setup.num_roots,
         conn_setup.num_formats,
@@ -114,9 +178,9 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
         conn_setup.min_keycode,
         conn_setup.max_keycode,
     ]);
-    additional_data.append(&mut connection.to_bytes_32(conn_setup.pad2).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(conn_setup.pad2).to_vec());
     additional_data.append(&mut VENDOR.as_bytes().to_vec());
-    additional_data.append(&mut vec![0u8; Connection::pad(VENDOR.len())]);
+    additional_data.append(&mut vec![0u8; pad(VENDOR.len())]);
 
     /* Append Pixmap Formats */
     for default_pixmap_format in DEFAULT_PIXMAP_FORMATS {
@@ -126,7 +190,7 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
             default_pixmap_format.scanline_pad,
             default_pixmap_format.pad0,
         ]);
-        additional_data.append(&mut connection.to_bytes_32(default_pixmap_format.pad1).to_vec());
+        additional_data.append(&mut endianness.to_bytes_32(default_pixmap_format.pad1).to_vec());
     }
 
     /* Define some defaults */
@@ -168,18 +232,18 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
 
     /* Append Screens */
 
-    additional_data.append(&mut connection.to_bytes_32(screen.root_window).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(screen.default_colormap).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(screen.white_pixel).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(screen.black_pixel).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(screen.current_input_masks).to_vec());
-    additional_data.append(&mut connection.to_bytes_16(screen.width_px).to_vec());
-    additional_data.append(&mut connection.to_bytes_16(screen.height_px).to_vec());
-    additional_data.append(&mut connection.to_bytes_16(screen.width_mm).to_vec());
-    additional_data.append(&mut connection.to_bytes_16(screen.height_mm).to_vec());
-    additional_data.append(&mut connection.to_bytes_16(screen.min_installed_maps).to_vec());
-    additional_data.append(&mut connection.to_bytes_16(screen.max_installed_maps).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(screen.root_visual).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(screen.root_window).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(screen.default_colormap).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(screen.white_pixel).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(screen.black_pixel).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(screen.current_input_masks).to_vec());
+    additional_data.append(&mut endianness.to_bytes_16(screen.width_px).to_vec());
+    additional_data.append(&mut endianness.to_bytes_16(screen.height_px).to_vec());
+    additional_data.append(&mut endianness.to_bytes_16(screen.width_mm).to_vec());
+    additional_data.append(&mut endianness.to_bytes_16(screen.height_mm).to_vec());
+    additional_data.append(&mut endianness.to_bytes_16(screen.min_installed_maps).to_vec());
+    additional_data.append(&mut endianness.to_bytes_16(screen.max_installed_maps).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(screen.root_visual).to_vec());
     additional_data.append(&mut vec![
         screen.backing_stores,
         screen.save_unders,
@@ -190,18 +254,18 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
     /* Append Depths */
 
     additional_data.append(&mut vec![depth.depth, depth.pad0]);
-    additional_data.append(&mut connection.to_bytes_16(depth.number_of_visuals).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(depth.pad1).to_vec());
+    additional_data.append(&mut endianness.to_bytes_16(depth.number_of_visuals).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(depth.pad1).to_vec());
 
     /* Append Visuals */
 
-    additional_data.append(&mut connection.to_bytes_32(visual.visual_id).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(visual.visual_id).to_vec());
     additional_data.append(&mut vec![visual.class, visual.bits_per_rgb_val]);
-    additional_data.append(&mut connection.to_bytes_16(visual.colormap_entries).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(visual.red_mask).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(visual.green_mask).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(visual.blue_mask).to_vec());
-    additional_data.append(&mut connection.to_bytes_32(visual.pad0).to_vec());
+    additional_data.append(&mut endianness.to_bytes_16(visual.colormap_entries).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(visual.red_mask).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(visual.green_mask).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(visual.blue_mask).to_vec());
+    additional_data.append(&mut endianness.to_bytes_32(visual.pad0).to_vec());
 
     /* Write Connection Setup Data */
     let conn_setup_prefix = ConnSetupPrefix {
@@ -213,10 +277,10 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
     };
 
     let mut prefix_data = vec![conn_setup_prefix.success, conn_setup_prefix.length_reason];
-    prefix_data.append(&mut connection.to_bytes_16(conn_setup_prefix.major).to_vec());
-    prefix_data.append(&mut connection.to_bytes_16(conn_setup_prefix.major).to_vec());
+    prefix_data.append(&mut endianness.to_bytes_16(conn_setup_prefix.major).to_vec());
+    prefix_data.append(&mut endianness.to_bytes_16(conn_setup_prefix.major).to_vec());
     prefix_data.append(
-        &mut connection
+        &mut endianness
             .to_bytes_16(conn_setup_prefix.additional_length)
             .to_vec(),
     );
@@ -224,5 +288,35 @@ pub fn establish_connection(mut stream: &TcpStream) -> Option<Connection> {
     stream.write(&prefix_data).ok();
     stream.write(&additional_data).ok()?;
 
-    Some(connection)
+    Some(Connection {
+        stream,
+        endianness,
+        sequence_number: 0,
+    })
+}
+
+impl<T: Read + Write> Connection<T> {
+    pub fn card32(&self, bytes: &[u8]) -> u32 {
+        self.endianness.card32(bytes)
+    }
+
+    pub fn card16(&self, bytes: &[u8]) -> u16 {
+        self.endianness.card16(bytes)
+    }
+
+    pub fn int16(&self, bytes: &[u8]) -> i16 {
+        self.card16(bytes) as i16
+    }
+
+    pub fn copy8to32(&self, source: &[u8]) -> Vec<u32> {
+        self.endianness.copy8to32(source)
+    }
+
+    pub fn to_bytes_32(&self, val: u32) -> [u8; 4] {
+        self.endianness.to_bytes_32(val)
+    }
+
+    pub fn to_bytes_16(&self, val: u16) -> [u8; 2] {
+        self.endianness.to_bytes_16(val)
+    }
 }

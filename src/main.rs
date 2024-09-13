@@ -10,7 +10,7 @@ fn main() {
 
     for stream in listener.incoming() {
         let stream = stream.unwrap();
-        thread::spawn(|| match handle_connection(stream) {
+        thread::spawn(|| match handle_connection_tcp(stream) {
             _ => {
                 println!("Ended.")
             }
@@ -18,11 +18,11 @@ fn main() {
     }
 }
 
-fn handle_connection(stream: TcpStream) -> Option<()> {
-    let mut connection = establish_connection(&stream)?;
+fn handle_connection_tcp(mut stream: TcpStream) -> Option<()> {
+    let mut connection = establish_connection(&mut stream)?;
     loop {
-        let request = connection.read_request(&stream)?;
+        let request = connection.read_request()?;
         println!("{request:#?}");
-        connection.write_response(&stream, request);
+        connection.write_response(request);
     }
 }
