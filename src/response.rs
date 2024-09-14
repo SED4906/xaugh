@@ -1,46 +1,26 @@
-use std::io::{Read,Write};
+use std::io::{Read, Write};
 
-use crate::{request::Request, connection::Connection};
+use crate::{connection::Connection, request::Request};
 
 impl<T: Read + Write> Connection<T> {
-    pub fn empty_response(&mut self, extra_length: u32) {
-        println!("(not really implemented)");
-        let mut bytes_to_write = vec![
+    pub fn stub_response(&mut self, extra_length: u32) {
+        println!("(stubbed)");
+        let mut bytes_to_write = self.empty_response(extra_length,0);
+        bytes_to_write.append(&mut vec![0;24 + extra_length as usize * 4]);
+        self.stream.write(&bytes_to_write).unwrap();
+    }
+
+    pub fn empty_response(&mut self, extra_length: u32, extra: u8) -> Vec<u8> {
+        vec![
             1,
-            0,
+            extra,
             self.to_bytes_16(self.sequence_number)[0],
             self.to_bytes_16(self.sequence_number)[1],
             self.to_bytes_32(extra_length)[0],
             self.to_bytes_32(extra_length)[1],
             self.to_bytes_32(extra_length)[2],
             self.to_bytes_32(extra_length)[3],
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-        ];
-        bytes_to_write.append(&mut vec![0; 4 * extra_length as usize]);
-        self.stream.write(&bytes_to_write).unwrap();
+        ]
     }
 
     pub fn write_response(&mut self, request: Request) {
@@ -49,7 +29,7 @@ impl<T: Read + Write> Connection<T> {
             Request::CreateWindow { .. } => {}
             Request::ChangeWindowAttributes { .. } => {}
             Request::GetWindowAttributes { .. } => {
-                self.empty_response(0);
+                self.stub_response(0);
             }
             Request::DestroyWindow { .. } => {}
             Request::DestroySubwindows { .. } => {}
@@ -62,35 +42,39 @@ impl<T: Read + Write> Connection<T> {
             Request::ConfigureWindow { .. } => {}
             Request::CirculateWindow { .. } => {}
             Request::GetGeometry { .. } => {
-                self.empty_response(0);
+                self.stub_response(0);
             }
             Request::QueryTree { .. } => {
-                self.empty_response(0);
+                self.stub_response(0);
             }
-            Request::InternAtom { .. } => {
-                self.empty_response(0);
+            Request::InternAtom { only_if_exists, name } => {
+                let atom = crate::atom::get_atom(only_if_exists, name);
+                let mut bytes_to_write = self.empty_response(0, 0);
+                bytes_to_write.append(&mut self.to_bytes_32(atom).to_vec());
+                bytes_to_write.append(&mut vec![0;20]);
+                self.stream.write(&bytes_to_write).unwrap();
             }
             Request::GetAtomName { .. } => {
-                self.empty_response(0);
+                self.stub_response(0);
             }
             Request::ChangeProperty { .. } => {}
             Request::DeleteProperty { .. } => {}
             Request::GetProperty { .. } => {
-                self.empty_response(0);
+                self.stub_response(0);
             }
             Request::GetSelectionOwner { .. } => {
-                self.empty_response(0);
+                self.stub_response(0);
             }
             Request::GrabServer => {}
             Request::GetInputFocus => {
-                self.empty_response(0);
+                self.stub_response(0);
             }
             Request::OpenFont { .. } => {}
             Request::QueryFont { .. } => {
-                self.empty_response(0);
+                self.stub_response(0);
             }
             Request::ListFonts { .. } => {
-                self.empty_response(0);
+                self.stub_response(0);
             }
             Request::CreatePixmap { .. } => {}
             Request::FreePixmap { .. } => {}
@@ -98,10 +82,10 @@ impl<T: Read + Write> Connection<T> {
             Request::FreeGC { .. } => {}
             Request::PutImage { .. } => {}
             Request::QueryExtension { .. } => {
-                self.empty_response(0);
+                self.stub_response(0);
             }
             Request::GetKeyboardControl => {
-                self.empty_response(5);
+                self.stub_response(5);
             }
             Request::NoOperation => {}
             _ => todo!("response"),

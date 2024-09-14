@@ -6,7 +6,6 @@ use crate::{
     VENDOR,
 };
 
-
 #[derive(Debug)]
 pub struct Connection<T: Read + Write> {
     pub stream: T,

@@ -1,6 +1,6 @@
-use std::io::{Read,Write};
+use std::io::{Read, Write};
 
-use crate::connection::Connection;
+use crate::{connection::Connection, event::Event};
 
 #[repr(C)]
 #[derive(Clone, Debug)]
@@ -67,7 +67,7 @@ pub enum Request {
         window: u32,
     },
     InternAtom {
-        only_if_exists: u8,
+        only_if_exists: bool,
         name: String,
     },
     GetAtomName {
@@ -99,7 +99,7 @@ pub enum Request {
         properties: Vec<u32>,
     },
     ListProperties {
-        window: u32
+        window: u32,
     },
     SetSelectionOwner {
         owner: u32,
@@ -109,12 +109,48 @@ pub enum Request {
     GetSelectionOwner {
         selection: u32,
     },
-    ConvertSelection,
-    SendEvent,
-    GrabPointer,
-    UngrabPointer,
-    GrabButton,
-    UngrabButton,
+    ConvertSelection {
+        requestor: u32,
+        selection: u32,
+        target: u32,
+        property: u32,
+        time: u32,
+    },
+    SendEvent {
+        propagate: bool,
+        destination: u32,
+        event_mask: u32,
+        event: Event,
+    },
+    GrabPointer {
+        owner_events: bool,
+        grab_window: u32,
+        event_mask: u16,
+        pointer_mode: u8,
+        keyboard_mode: u8,
+        confine_to: u32,
+        cursor: u32,
+        time: u32,
+    },
+    UngrabPointer {
+        time: u32,
+    },
+    GrabButton {
+        owner_events: bool,
+        grab_window: u32,
+        event_mask: u16,
+        pointer_mode: u8,
+        keyboard_mode: u8,
+        confine_to: u32,
+        cursor: u32,
+        button: u8,
+        modifiers: u16,
+    },
+    UngrabButton {
+        button: u8,
+        grab_window: u32,
+        modifiers: u16,
+    },
     ChangeActivePointerGrab,
     GrabKeyboard,
     UngrabKeyboard,
@@ -285,12 +321,14 @@ pub struct RequestPrefix {
 
 impl<T: Read + Write> Connection<T> {
     pub fn read_request(&mut self) -> Option<Request> {
-        let mut request_prefix_bytes = [0u8; 4];
-        self.stream.read(&mut request_prefix_bytes).unwrap();
-        let request_prefix = RequestPrefix {
-            opcode: request_prefix_bytes[0],
-            extra: request_prefix_bytes[1],
-            request_length: self.card16(&request_prefix_bytes[2..]),
+        let request_prefix = {
+            let mut request_prefix_bytes = [0u8; 4];
+            self.stream.read(&mut request_prefix_bytes).unwrap();
+            RequestPrefix {
+                opcode: request_prefix_bytes[0],
+                extra: request_prefix_bytes[1],
+                request_length: self.card16(&request_prefix_bytes[2..]),
+            }
         };
         let mut request_bytes =
             vec![0; (request_prefix.request_length as usize).saturating_sub(1) * 4];
@@ -480,7 +518,7 @@ impl<T: Read + Write> Connection<T> {
                 window: self.card32(&request_bytes),
             },
             16 => Request::InternAtom {
-                only_if_exists: request_prefix.extra,
+                only_if_exists: request_prefix.extra != 0,
                 name: String::from_utf8_lossy(
                     &request_bytes[4..self.card16(&request_bytes) as usize + 4],
                 )
@@ -516,7 +554,7 @@ impl<T: Read + Write> Connection<T> {
                 long_length: self.card32(&request_bytes[16..]),
             },
             21 => Request::ListProperties {
-                window: self.card32(&request_bytes)
+                window: self.card32(&request_bytes),
             },
             22 => Request::SetSelectionOwner {
                 owner: self.card32(&request_bytes),
@@ -525,6 +563,47 @@ impl<T: Read + Write> Connection<T> {
             },
             23 => Request::GetSelectionOwner {
                 selection: self.card32(&request_bytes),
+            },
+            24 => Request::ConvertSelection {
+                requestor: self.card32(&request_bytes),
+                selection: self.card32(&request_bytes[4..]),
+                target: self.card32(&request_bytes[8..]),
+                property: self.card32(&request_bytes[12..]),
+                time: self.card32(&request_bytes[16..]),
+            },
+            25 => Request::SendEvent {
+                propagate: request_prefix.extra != 0,
+                destination: self.card32(&request_bytes),
+                event_mask: self.card32(&request_bytes[4..]),
+                event: self.event(&request_bytes[8..]),
+            },
+            26 => Request::GrabPointer {
+                owner_events: request_prefix.extra != 0,
+                grab_window: self.card32(&request_bytes),
+                event_mask: self.card16(&request_bytes[4..]),
+                pointer_mode: request_bytes[6],
+                keyboard_mode: request_bytes[7],
+                confine_to: self.card32(&request_bytes[8..]),
+                cursor: self.card32(&request_bytes[12..]),
+                time: self.card32(&request_bytes[16..])
+            },
+            27 => Request::UngrabPointer {
+                time: self.card32(&request_bytes)
+            },
+            28 => Request::GrabButton {
+                owner_events: request_prefix.extra != 0,
+                grab_window: self.card32(&request_bytes),
+                event_mask: self.card16(&request_bytes[4..]),
+                pointer_mode: request_bytes[6],
+                keyboard_mode: request_bytes[7],
+                confine_to: self.card32(&request_bytes[8..]),
+                cursor: self.card32(&request_bytes[12..]),
+                button: request_bytes[14], modifiers: self.card16(&request_bytes[16..])
+            },
+            29 => Request::UngrabButton {
+                button: request_prefix.extra,
+                grab_window: self.card32(&request_bytes),
+                modifiers: self.card16(&request_bytes[4..])
             },
             36 => Request::GrabServer,
             43 => Request::GetInputFocus,
