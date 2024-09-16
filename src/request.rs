@@ -151,26 +151,78 @@ pub enum Request {
         grab_window: u32,
         modifiers: u16,
     },
-    ChangeActivePointerGrab,
-    GrabKeyboard,
-    UngrabKeyboard,
-    GrabKey,
-    UngrabKey,
-    AllowEvents,
+    ChangeActivePointerGrab {
+        cursor: u32,
+        time: u32,
+        event_mask: u16,
+    },
+    GrabKeyboard {
+        owner_events: bool,
+        grab_window: u32,
+        time: u32,
+        pointer_mode: u8,
+        keyboard_mode: u8,
+    },
+    UngrabKeyboard {
+        time: u32,
+    },
+    GrabKey {
+        owner_events: bool,
+        grab_window: u32,
+        modifiers: u16,
+        key: u8,
+        pointer_mode: u8,
+        keyboard_mode: u8,
+    },
+    UngrabKey {
+        key: u8,
+        grab_window: u32,
+        modifiers: u16,
+    },
+    AllowEvents {
+        mode: u8,
+        time: u32,
+    },
     GrabServer,
     UngrabServer,
-    QueryPointer,
-    GetMotionEvents,
-    TranslateCoordinates,
-    WarpPointer,
-    SetInputFocus,
+    QueryPointer {
+        window: u32,
+    },
+    GetMotionEvents {
+        window: u32,
+        start: u32,
+        stop: u32,
+    },
+    TranslateCoordinates {
+        src_window: u32,
+        dst_window: u32,
+        src_x: i16,
+        src_y: i16,
+    },
+    WarpPointer {
+        src_window: u32,
+        dst_window: u32,
+        src_x: i16,
+        src_y: i16,
+        src_width: u16,
+        src_height: u16,
+        dst_x: i16,
+        dst_y: i16,
+    },
+    SetInputFocus {
+        revert_to: u8,
+        focus: u32,
+        time: u32,
+    },
     GetInputFocus,
     QueryKeymap,
     OpenFont {
         fid: u32,
         name: String,
     },
-    CloseFont,
+    CloseFont {
+        font: u32,
+    },
     QueryFont {
         fid: u32,
     },
@@ -585,10 +637,10 @@ impl<T: Read + Write> Connection<T> {
                 keyboard_mode: request_bytes[7],
                 confine_to: self.card32(&request_bytes[8..]),
                 cursor: self.card32(&request_bytes[12..]),
-                time: self.card32(&request_bytes[16..])
+                time: self.card32(&request_bytes[16..]),
             },
             27 => Request::UngrabPointer {
-                time: self.card32(&request_bytes)
+                time: self.card32(&request_bytes),
             },
             28 => Request::GrabButton {
                 owner_events: request_prefix.extra != 0,
@@ -598,21 +650,88 @@ impl<T: Read + Write> Connection<T> {
                 keyboard_mode: request_bytes[7],
                 confine_to: self.card32(&request_bytes[8..]),
                 cursor: self.card32(&request_bytes[12..]),
-                button: request_bytes[14], modifiers: self.card16(&request_bytes[16..])
+                button: request_bytes[14],
+                modifiers: self.card16(&request_bytes[16..]),
             },
             29 => Request::UngrabButton {
                 button: request_prefix.extra,
                 grab_window: self.card32(&request_bytes),
-                modifiers: self.card16(&request_bytes[4..])
+                modifiers: self.card16(&request_bytes[4..]),
+            },
+            30 => Request::ChangeActivePointerGrab {
+                cursor: self.card32(&request_bytes),
+                time: self.card32(&request_bytes[4..]),
+                event_mask: self.card16(&request_bytes[8..]),
+            },
+            31 => Request::GrabKeyboard {
+                owner_events: request_prefix.extra != 0,
+                grab_window: self.card32(&request_bytes),
+                time: self.card32(&request_bytes[4..]),
+                pointer_mode: request_bytes[8],
+                keyboard_mode: request_bytes[9],
+            },
+            32 => Request::UngrabKeyboard {
+                time: self.card32(&request_bytes),
+            },
+            33 => Request::GrabKey {
+                owner_events: request_prefix.extra != 0,
+                grab_window: self.card32(&request_bytes),
+                modifiers: self.card16(&request_bytes[4..]),
+                key: request_bytes[6],
+                pointer_mode: request_bytes[7],
+                keyboard_mode: request_bytes[8],
+            },
+            34 => Request::UngrabKey {
+                key: request_prefix.extra,
+                grab_window: self.card32(&request_bytes),
+                modifiers: self.card16(&request_bytes[4..]),
+            },
+            35 => Request::AllowEvents {
+                mode: request_prefix.extra,
+                time: self.card32(&request_bytes),
             },
             36 => Request::GrabServer,
+            37 => Request::UngrabServer,
+            38 => Request::QueryPointer {
+                window: self.card32(&request_bytes),
+            },
+            39 => Request::GetMotionEvents {
+                window: self.card32(&request_bytes),
+                start: self.card32(&request_bytes[4..]),
+                stop: self.card32(&request_bytes[8..]),
+            },
+            40 => Request::TranslateCoordinates {
+                src_window: self.card32(&request_bytes),
+                dst_window: self.card32(&request_bytes[4..]),
+                src_x: self.int16(&request_bytes[8..]),
+                src_y: self.int16(&request_bytes[10..]),
+            },
+            41 => Request::WarpPointer {
+                src_window: self.card32(&request_bytes),
+                dst_window: self.card32(&request_bytes[4..]),
+                src_x: self.int16(&request_bytes[8..]),
+                src_y: self.int16(&request_bytes[10..]),
+                src_width: self.card16(&request_bytes[12..]),
+                src_height: self.card16(&request_bytes[14..]),
+                dst_x: self.int16(&request_bytes[16..]),
+                dst_y: self.int16(&request_bytes[18..]),
+            },
+            42 => Request::SetInputFocus {
+                revert_to: request_prefix.extra,
+                focus: self.card32(&request_bytes),
+                time: self.card32(&request_bytes[4..]),
+            },
             43 => Request::GetInputFocus,
+            44 => Request::QueryKeymap,
             45 => Request::OpenFont {
                 fid: self.card32(&request_bytes),
                 name: String::from_utf8_lossy(
                     &request_bytes[8..self.card16(&request_bytes[4..]) as usize + 8],
                 )
                 .to_string(),
+            },
+            46 => Request::CloseFont {
+                font: self.card32(&request_bytes),
             },
             47 => Request::QueryFont {
                 fid: self.card32(&request_bytes),
